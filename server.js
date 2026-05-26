@@ -48,7 +48,7 @@ const passwordResetOtps = new Map();
 app.use(express.json({ limit: '50mb' }));
 
 app.get('/favicon.ico', (_req, res) => {
-  res.status(204).end();
+  res.type('image/png').sendFile(path.join(__dirname, 'assets', 'favicon.png'));
 });
 
 function assertSyncKey(key) {

@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5,user-scalable=yes">
 <title>ONEPWS AuditPro — Integrated QMS Portal</title>
+<link rel="icon" type="image/png" href="assets/favicon.png">
+<link rel="shortcut icon" type="image/png" href="assets/favicon.png">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.6.0/jspdf.plugin.autotable.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
@@ -384,13 +386,13 @@ input:focus,select:focus,textarea:focus{border-color:var(--brand);background:var
     <div class="lerr" id="lerr">Invalid credentials. Please try again.</div>
     <div class="lf"><label>Login ID</label><input id="li-u" placeholder="Enter login ID" autocomplete="username"></div>
     <div class="lf"><label>Password</label>
-      <div style="position:relative;"><input id="li-p" type="password" placeholder="Enter password" autocomplete="current-password">
-        <span id="pw-toggle" onclick="togglePassword()" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);cursor:pointer;font-size:14px;user-select:none;"><i data-lucide="eye" class="ico-svg"></i></span>
+      <div style="position:relative;"><input id="li-p" type="password" placeholder="Enter password" autocomplete="current-password" style="padding-right:42px;">
+        <button id="pw-toggle" type="button" class="btn btn-ghost btn-icon" aria-label="Show password" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);width:28px;height:28px;padding:0;"><i data-lucide="eye" class="ico-svg"></i></button>
       </div>
     </div>
     <div class="fb" style="margin-bottom:10px;">
       <label for="li-rem" style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text2);cursor:pointer;"><input type="checkbox" id="li-rem" style="width:auto;">Remember Me</label>
-      <button class="btn btn-ghost btn-sm" style="padding:4px 7px;font-size:10px;" onclick="openForgotModal()" type="button"><i data-lucide="key-round" class="ico-svg"></i>Forgot?</button>
+      <button class="btn btn-ghost btn-sm" id="forgot-btn" style="padding:4px 7px;font-size:10px;" type="button"><i data-lucide="key-round" class="ico-svg"></i>Forgot?</button>
     </div>
     <button class="btn btn-brand wf" style="padding:10px;font-size:13px;" onclick="doLogin()"><i data-lucide="log-in" class="ico-svg"></i>Sign In</button>
   </div>
@@ -1243,14 +1245,17 @@ function qs(sel){return document.querySelector(sel);}
 let toastTmr;
 function showToast(msg,dur=3200){const t=el('toast');t.textContent=msg;renderIcons(t);t.classList.add('show');clearTimeout(toastTmr);toastTmr=setTimeout(()=>t.classList.remove('show'),dur);}
 
-function togglePassword(){
+function togglePassword(evt){
+  if(evt&&evt.preventDefault)evt.preventDefault();
   var p=el('li-p');var t=el('pw-toggle');if(!p||!t)return;
   p.type=p.type==='password'?'text':'password';
+  t.setAttribute('aria-label',p.type==='password'?'Show password':'Hide password');
   t.innerHTML=icon(p.type==='password'?'eye':'eye-off');
   renderIcons(t);
 }
 
-function openForgotModal(){
+function openForgotModal(evt){
+  if(evt&&evt.preventDefault)evt.preventDefault();
   el('fp-id').value=el('li-u')?.value.trim()||'';
   el('fp-otp').value='';el('fp-pw').value='';el('fp-pw2').value='';
   el('fp-step2').classList.add('hidden');
@@ -1394,6 +1399,8 @@ document.addEventListener('DOMContentLoaded',()=>{
   }
   // Enter key on login
   ['li-u','li-p'].forEach(id=>el(id)?.addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();}));
+  el('pw-toggle')?.addEventListener('click',togglePassword);
+  el('forgot-btn')?.addEventListener('click',openForgotModal);
   // Restore remembered credentials
   const remU=LS.get('ap_rem_u','');const remP=LS.get('ap_rem_p','');
   if(remU){el('li-u').value=remU;el('li-p').value=remP;var remCb=el('li-rem');if(remCb)remCb.checked=true;}
