@@ -1277,12 +1277,16 @@ function resetForgotPassword(){
   if(pw.length<6){showToast('Password must be at least 6 characters');return;}
   const btn=el('fp-reset');if(btn)btn.disabled=true;
   _apiFetch('/api/auth/reset-password',{method:'POST',body:JSON.stringify({identity,otp,password:pw})}).then(function(data){
-    const users=APP.users;const i=users.findIndex(u=>u.id===data.userId||u.loginId===data.loginId);
-    if(i>=0){users[i].password=pw;APP.users=users;}
-    closeM('m-forgot');
-    el('li-u').value=data.loginId||identity;
-    el('li-p').value='';
-    showToast('Password reset complete. Please sign in.');
+    return syncUsersFromApi().catch(function(){
+      const users=APP.users;const i=users.findIndex(u=>u.id===data.userId||u.loginId===data.loginId);
+      if(i>=0){users[i].password=pw;APP.users=users;}
+      return users;
+    }).then(function(){
+      closeM('m-forgot');
+      el('li-u').value=data.loginId||identity;
+      el('li-p').value='';
+      showToast('Password reset complete. Please sign in.');
+    });
   }).catch(function(e){
     showToast('Password reset failed: '+e.message,5000);
   }).finally(function(){if(btn)btn.disabled=false;});
@@ -1322,21 +1326,48 @@ function populateDeptSel(sid){
   s.innerHTML='<option value="">All Departments</option>'+APP.depts.map(d=>`<option value="${d.code}">${d.name}</option>`).join('');
 }
 
+function syncUsersFromApi(){
+  return _apiFetch('/api/sync/ap_users').then(function(payload){
+    if(payload&&Array.isArray(payload.value)){
+      localStorage.setItem('ap_users',JSON.stringify(payload.value));
+      return payload.value;
+    }
+    return APP.users;
+  });
+}
+
 // ═══════════════════════════════════════════════════
 // LOGIN / LOGOUT
 // ═══════════════════════════════════════════════════
+function finishLogin(user){
+  APP.currentUser=user;
+  el('login-screen').style.display='none';
+  el('app').classList.remove('hidden');
+  initApp();
+}
+
+function showLoginError(msg){
+  const errEl=el('lerr');
+  errEl.textContent=msg||'Invalid credentials. Please try again.';
+  errEl.style.display='block';
+  setTimeout(()=>{errEl.style.display='none';},3500);
+}
+
 function doLogin(){
   const uid=el('li-u').value.trim(), pwd=el('li-p').value;
   ensureRoleDefaults();
   const rem=el('li-rem')?.checked||false;
   if(rem){LS.set('ap_rem_u',uid);LS.set('ap_rem_p',pwd);}else{LS.del('ap_rem_u');LS.del('ap_rem_p');}
-  const user=APP.users.find(u=>u.loginId===uid&&u.password===pwd&&u.active);
-  const errEl=el('lerr');
-  if(!user){errEl.style.display='block';setTimeout(()=>errEl.style.display='none',3000);return;}
-  APP.currentUser=user;
-  el('login-screen').style.display='none';
-  el('app').classList.remove('hidden');
-  initApp();
+  const findUser=function(){return APP.users.find(u=>u.loginId===uid&&u.password===pwd&&u.active);};
+  const user=findUser();
+  if(user){finishLogin(user);return;}
+  syncUsersFromApi().then(function(){
+    const cloudUser=findUser();
+    if(cloudUser){finishLogin(cloudUser);return;}
+    showLoginError();
+  }).catch(function(){
+    showLoginError();
+  });
 }
 window.addEventListener('hashchange',()=>{const h=location.hash.slice(1);if(h&&APP.currentUser)navigate(h);});
 document.addEventListener('DOMContentLoaded',()=>{
@@ -1366,6 +1397,7 @@ document.addEventListener('DOMContentLoaded',()=>{
   // Restore remembered credentials
   const remU=LS.get('ap_rem_u','');const remP=LS.get('ap_rem_p','');
   if(remU){el('li-u').value=remU;el('li-p').value=remP;var remCb=el('li-rem');if(remCb)remCb.checked=true;}
+  syncUsersFromApi().catch(function(e){console.warn('Login user sync skipped:',e.message);});
   LS.set('ap_show_creds',false);
 });
 
