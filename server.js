@@ -4,6 +4,7 @@ require('dotenv').config();
 
 const express = require('express');
 const path = require('path');
+const crypto = require('crypto');
 const { MongoClient } = require('mongodb');
 const nodemailer = require('nodemailer');
 
@@ -42,6 +43,7 @@ let mongoClient;
 let appData;
 let mongoConnectPromise;
 let mailer;
+const passwordResetOtps = new Map();
 
 app.use(express.json({ limit: '50mb' }));
 
@@ -114,6 +116,29 @@ function parseRecipients(input) {
     return input.split(/[;,]/).map(v => v.trim()).filter(Boolean);
   }
   return [];
+}
+
+function cleanIdentity(input) {
+  return String(input || '').trim().toLowerCase();
+}
+
+function hashOtp(userId, otp) {
+  return crypto.createHash('sha256').update(`${userId}:${otp}:${SMTP_PASS || 'auditpro'}`).digest('hex');
+}
+
+async function getUsersRecord() {
+  const collection = await getCollection();
+  const row = await collection.findOne({ key: 'ap_users' });
+  return { collection, users: Array.isArray(row && row.value) ? row.value : [] };
+}
+
+function findUserByIdentity(users, identity) {
+  const needle = cleanIdentity(identity);
+  if (!needle) return null;
+  return users.find(user => {
+    if (!user || user.active === false) return false;
+    return cleanIdentity(user.loginId) === needle || cleanIdentity(user.email) === needle;
+  }) || null;
 }
 
 function wrapAsync(fn) {
@@ -256,6 +281,85 @@ app.post('/api/email', wrapAsync(async (req, res) => {
   });
 
   res.json({ ok: true, messageId: info.messageId, accepted: info.accepted });
+}));
+
+app.post('/api/auth/forgot-password', wrapAsync(async (req, res) => {
+  const identity = cleanIdentity(req.body && req.body.identity);
+  if (!identity) return res.status(400).json({ ok: false, error: 'Login ID or email is required' });
+
+  const { users } = await getUsersRecord();
+  const user = findUserByIdentity(users, identity);
+  if (!user || !user.email) {
+    return res.status(404).json({ ok: false, error: 'No active account found with a registered email' });
+  }
+
+  const otp = String(crypto.randomInt(100000, 1000000));
+  passwordResetOtps.set(user.id, {
+    otpHash: hashOtp(user.id, otp),
+    expiresAt: Date.now() + (15 * 60 * 1000),
+    attempts: 0
+  });
+
+  const transport = getMailer();
+  const subject = 'ONEPWS AuditPro password reset OTP';
+  const text = [
+    `Hello ${user.name || user.loginId},`,
+    '',
+    `Your ONEPWS AuditPro password reset OTP is ${otp}.`,
+    'This OTP is valid for 15 minutes.',
+    '',
+    'If you did not request this reset, please ignore this email.'
+  ].join('\n');
+  const html = `<p>Hello ${user.name || user.loginId},</p><p>Your ONEPWS AuditPro password reset OTP is <strong style="font-size:18px;letter-spacing:3px;">${otp}</strong>.</p><p>This OTP is valid for 15 minutes.</p><p>If you did not request this reset, please ignore this email.</p>`;
+
+  await transport.sendMail({
+    from: SMTP_FROM,
+    to: user.email,
+    subject,
+    text,
+    html
+  });
+
+  res.json({ ok: true, maskedEmail: user.email.replace(/^(.).+(@.+)$/, '$1***$2') });
+}));
+
+app.post('/api/auth/reset-password', wrapAsync(async (req, res) => {
+  const identity = cleanIdentity(req.body && req.body.identity);
+  const otp = String((req.body && req.body.otp) || '').trim();
+  const password = String((req.body && req.body.password) || '');
+  if (!identity || !otp || !password) return res.status(400).json({ ok: false, error: 'Identity, OTP and new password are required' });
+  if (password.length < 6) return res.status(400).json({ ok: false, error: 'Password must be at least 6 characters' });
+
+  const { collection, users } = await getUsersRecord();
+  const user = findUserByIdentity(users, identity);
+  if (!user) return res.status(404).json({ ok: false, error: 'No active account found' });
+
+  const reset = passwordResetOtps.get(user.id);
+  if (!reset || reset.expiresAt < Date.now()) {
+    passwordResetOtps.delete(user.id);
+    return res.status(400).json({ ok: false, error: 'OTP expired. Please request a new OTP' });
+  }
+
+  reset.attempts += 1;
+  if (reset.attempts > 5) {
+    passwordResetOtps.delete(user.id);
+    return res.status(429).json({ ok: false, error: 'Too many OTP attempts. Please request a new OTP' });
+  }
+
+  if (reset.otpHash !== hashOtp(user.id, otp)) {
+    return res.status(400).json({ ok: false, error: 'Invalid OTP' });
+  }
+
+  const nextUsers = users.map(row => row && row.id === user.id ? Object.assign({}, row, { password }) : row);
+  const now = new Date();
+  await collection.updateOne(
+    { key: 'ap_users' },
+    { $set: { key: 'ap_users', value: nextUsers, updatedAt: now, updatedBy: 'password-reset' } },
+    { upsert: true }
+  );
+  passwordResetOtps.delete(user.id);
+
+  res.json({ ok: true, userId: user.id, loginId: user.loginId, updatedAt: now });
 }));
 
 app.use(express.static(__dirname));

@@ -8,6 +8,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.6.0/jspdf.plugin.autotable.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://unpkg.com/lucide@latest"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
 <style>
 :root{
   --bg:#f5f6fa;--bg2:#fff;--bg3:#eef0f5;
@@ -23,7 +26,7 @@
   --shadow:0 1px 3px rgba(0,0,0,.08);
   --shadow-md:0 4px 16px rgba(0,0,0,.12);
   --r:10px;--sw:252px;
-  --font:'Segoe UI','Noto Sans',Arial,system-ui,sans-serif;
+  --font:'Be Vietnam Pro','Segoe UI','Noto Sans',Arial,system-ui,sans-serif;
 }
 *{box-sizing:border-box;margin:0;padding:0;}
 html,body{height:100%;font-family:var(--font);background:var(--bg);color:var(--text);font-size:14px;line-height:1.5;overflow:hidden;}
@@ -385,17 +388,11 @@ input:focus,select:focus,textarea:focus{border-color:var(--brand);background:var
         <span id="pw-toggle" onclick="togglePassword()" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);cursor:pointer;font-size:14px;user-select:none;"><i data-lucide="eye" class="ico-svg"></i></span>
       </div>
     </div>
-    <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px;"><input type="checkbox" id="li-rem" style="width:auto;"><label for="li-rem" style="font-size:11px;color:var(--text2);cursor:pointer;">Remember Me</label></div>
-    <button class="btn btn-brand wf" style="padding:10px;font-size:13px;" onclick="doLogin()">Sign In →</button>
-    <div class="demo-box" id="demo-creds">
-      <p>Quick Access <button class="btn btn-ghost btn-sm" style="float:right;padding:2px 6px;font-size:9px;" onclick="el('demo-creds').style.display='none'">Hide</button></p>
-      <div class="demo-row"><span>admin</span><span>Admin123!</span><span class="badge b-purple">Admin</span></div>
-      <div class="demo-row"><span>rsharma</span><span>Audit@123</span><span class="badge b-blue">Auditor</span></div>
-      <div class="demo-row"><span>spoc.str</span><span>Spoc@123</span><span class="badge b-green">Stores SPOC</span></div>
-      <div class="demo-row"><span>manager</span><span>Manager@123</span><span class="badge b-amber">Manager</span></div>
-      <div class="demo-row"><span>mgmt</span><span>View@123</span><span class="badge b-gray">Viewer</span></div>
-      <div style="margin-top:6px;font-size:9px;color:var(--text3);">Each dept has a SPOC login: spoc.prd, spoc.pur, etc.<br>Admin can change passwords & hide this box from System settings.</div>
+    <div class="fb" style="margin-bottom:10px;">
+      <label for="li-rem" style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text2);cursor:pointer;"><input type="checkbox" id="li-rem" style="width:auto;">Remember Me</label>
+      <button class="btn btn-ghost btn-sm" style="padding:4px 7px;font-size:10px;" onclick="openForgotModal()" type="button"><i data-lucide="key-round" class="ico-svg"></i>Forgot?</button>
     </div>
+    <button class="btn btn-brand wf" style="padding:10px;font-size:13px;" onclick="doLogin()"><i data-lucide="log-in" class="ico-svg"></i>Sign In</button>
   </div>
 </div>
 
@@ -518,6 +515,21 @@ input:focus,select:focus,textarea:focus{border-color:var(--brand);background:var
     <div class="mb2"><label class="lbl">Email</label><input id="pf-email" type="email"></div>
     <div class="grid g2 mb2" style="gap:9px;"><div><label class="lbl">New Password</label><input id="pf-pw" type="password" placeholder="Leave blank to keep old"></div><div><label class="lbl">Confirm Password</label><input id="pf-pw2" type="password"></div></div>
     <div class="flex g2u"><button class="btn btn-ghost" style="flex:1" onclick="closeM('m-profile')">Cancel</button><button class="btn btn-brand" style="flex:1" onclick="saveProfile()">Save Profile</button></div>
+  </div>
+</div>
+
+<!-- FORGOT PASSWORD MODAL -->
+<div class="mbg hidden" id="m-forgot">
+  <div class="modal" style="max-width:420px;">
+    <div class="mh"><span><i data-lucide="key-round" class="ico-svg"></i> Reset Password</span><button class="btn btn-ghost btn-icon btn-sm" onclick="closeM('m-forgot')"><i data-lucide="x" class="ico-svg"></i></button></div>
+    <div class="mb2"><label class="lbl">Login ID or Email</label><input id="fp-id" autocomplete="username" placeholder="Enter your login ID or email"></div>
+    <button class="btn btn-primary wf mb2" id="fp-send" onclick="requestPasswordOtp()"><i data-lucide="mail" class="ico-svg"></i>Send OTP</button>
+    <div id="fp-step2" class="hidden" style="border-top:1px solid var(--border);padding-top:12px;margin-top:12px;">
+      <div class="info-box mb2">Enter the OTP sent to your registered email. The email contains only an OTP, no localhost link.</div>
+      <div class="grid g2 mb2" style="gap:9px;"><div><label class="lbl">OTP</label><input id="fp-otp" inputmode="numeric" maxlength="6" placeholder="6 digit OTP"></div><div><label class="lbl">New Password</label><input id="fp-pw" type="password" placeholder="Min 6 chars"></div></div>
+      <div class="mb2"><label class="lbl">Confirm Password</label><input id="fp-pw2" type="password"></div>
+      <button class="btn btn-brand wf" id="fp-reset" onclick="resetForgotPassword()"><i data-lucide="shield-check" class="ico-svg"></i>Reset Password</button>
+    </div>
   </div>
 </div>
 
@@ -987,9 +999,9 @@ const STAT_BADGE={open:'b-red','in-progress':'b-amber',delayed:'b-red',closed:'b
 const STAT_LABEL={open:'Open','in-progress':'In Progress',delayed:'Delayed',closed:'Closed','pending-closure':'Pending Review'};
 const PAGE_META={
   dashboard:   {title:'Executive Dashboard',  sub:new Date().toLocaleString('en-US',{month:'long',year:'numeric'})+' · ONEPWS',act:'+ New Audit'},
-  analytics:   {title:'Analytics & Insights', sub:'Real-time compliance intelligence',act:'📄 Export PDF'},
+  analytics:   {title:'Analytics & Insights', sub:'Real-time compliance intelligence',act:'Export PDF'},
   planning:    {title:'Audit Planning',        sub:'Annual schedule · 4 cycles/year',act:'+ Schedule Audit'},
-  execution:   {title:'Audit Execution',       sub:'Active audit — Stores · —',act:'💾 Save Draft'},
+  execution:   {title:'Audit Execution',       sub:'Active audit — Stores · —',act:'Save Draft'},
   reports:     {title:'Audit Reports',         sub:'Department-wise PDF & Excel reports',act:'Generate Report'},
   findings:    {title:'Findings Register',     sub:'Non-conformances · AS9100D §10.2',act:'Export Findings'},
   capa:        {title:'CAPA Tracker',          sub:'Corrective & Preventive Actions',act:'Export CAPA'},
@@ -999,8 +1011,8 @@ const PAGE_META={
   mytasks:     {title:'My Pending Tasks',      sub:'Personalized task view',act:'Refresh'},
   managerpanel:{title:'Manager Console',       sub:'Department NC review and escalation control',act:'Send Summary'},
   mastertracker:{title:'Master Tracker',       sub:'Central findings, CAPA & learnings',act:'Export All'},
-  ocp:         {title:'OCP Manual',           sub:'Operating Control Procedure — ONEPWS AuditPro',act:'📄 Download PDF'},
-  importdata:  {title:'Bulk Import',           sub:'Import findings/checkpoints/learnings via Excel',act:'📥 Import Excel'},
+  ocp:         {title:'OCP Manual',           sub:'Operating Control Procedure — ONEPWS AuditPro',act:'Download PDF'},
+  importdata:  {title:'Bulk Import',           sub:'Import findings/checkpoints/learnings via Excel',act:'Import Excel'},
 };
 
 // ═══════════════════════════════════════════════════
@@ -1155,12 +1167,13 @@ const EMOJI_ICON_MAP={
   '💾':'save','📸':'image','🔍':'search','❌':'circle-x','🤖':'bot','🗑':'trash-2','➕':'plus',
   '⭕':'circle','🔵':'circle-dot','▶':'play','🔒':'lock','🔑':'key-round','⏰':'clock','⚡':'zap',
   '🎉':'circle-check','📦':'package','⏭':'skip-forward','✏️':'pencil','✏':'pencil',
-  '🏆':'trophy','🎯':'target','🔄':'refresh-cw','⭐':'star'
+  '🏆':'trophy','🎯':'target','🔄':'refresh-cw','⭐':'star','📧':'mail','📝':'notebook-pen'
 };
+function emojiRegex(){const keys=Object.keys(EMOJI_ICON_MAP).sort((a,b)=>b.length-a.length);return new RegExp('('+keys.map(k=>k.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('|')+')','gu');}
+function stripEmojiText(value){return String(value||'').replace(emojiRegex(),'').replace(/\s+/g,' ').trim();}
 function replaceEmojiIcons(root){
   root=root||document.body;
-  const keys=Object.keys(EMOJI_ICON_MAP).sort((a,b)=>b.length-a.length);
-  const re=new RegExp('('+keys.map(k=>k.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('|')+')','gu');
+  const re=emojiRegex();
   const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{
     acceptNode:function(node){
       if(!node.nodeValue||!re.test(node.nodeValue)){re.lastIndex=0;return NodeFilter.FILTER_REJECT;}
@@ -1184,7 +1197,22 @@ function replaceEmojiIcons(root){
 }
 function renderIcons(root){
   replaceEmojiIcons(root||document.body);
+  (root||document.body).querySelectorAll?.('input[placeholder],textarea[placeholder]').forEach(function(node){
+    const next=stripEmojiText(node.getAttribute('placeholder'));
+    if(next!==node.getAttribute('placeholder'))node.setAttribute('placeholder',next);
+  });
   if(window.lucide&&window.lucide.createIcons)window.lucide.createIcons();
+}
+var _iconObserverStarted=false;
+function startIconObserver(){
+  if(_iconObserverStarted||!window.MutationObserver)return;
+  _iconObserverStarted=true;
+  var pending=false;
+  new MutationObserver(function(){
+    if(pending)return;
+    pending=true;
+    setTimeout(function(){pending=false;renderIcons(document.body);},60);
+  }).observe(document.body,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:['placeholder']});
 }
 
 var _debounceTimers={};function debounce(key,fn,ms){clearTimeout(_debounceTimers[key]);_debounceTimers[key]=setTimeout(fn,ms||300);}
@@ -1220,6 +1248,44 @@ function togglePassword(){
   p.type=p.type==='password'?'text':'password';
   t.innerHTML=icon(p.type==='password'?'eye':'eye-off');
   renderIcons(t);
+}
+
+function openForgotModal(){
+  el('fp-id').value=el('li-u')?.value.trim()||'';
+  el('fp-otp').value='';el('fp-pw').value='';el('fp-pw2').value='';
+  el('fp-step2').classList.add('hidden');
+  openM('m-forgot');
+}
+
+function requestPasswordOtp(){
+  const identity=el('fp-id').value.trim();
+  if(!identity){showToast('Enter login ID or registered email');return;}
+  const btn=el('fp-send');if(btn)btn.disabled=true;
+  _apiFetch('/api/auth/forgot-password',{method:'POST',body:JSON.stringify({identity})}).then(function(data){
+    el('fp-step2').classList.remove('hidden');
+    showToast('OTP sent to '+(data.maskedEmail||'registered email'),5000);
+    renderIcons(el('m-forgot'));
+  }).catch(function(e){
+    showToast('Password reset email failed: '+e.message,5000);
+  }).finally(function(){if(btn)btn.disabled=false;});
+}
+
+function resetForgotPassword(){
+  const identity=el('fp-id').value.trim(),otp=el('fp-otp').value.trim(),pw=el('fp-pw').value,pw2=el('fp-pw2').value;
+  if(!identity||!otp||!pw){showToast('Identity, OTP and new password are required');return;}
+  if(pw!==pw2){showToast('Passwords do not match');return;}
+  if(pw.length<6){showToast('Password must be at least 6 characters');return;}
+  const btn=el('fp-reset');if(btn)btn.disabled=true;
+  _apiFetch('/api/auth/reset-password',{method:'POST',body:JSON.stringify({identity,otp,password:pw})}).then(function(data){
+    const users=APP.users;const i=users.findIndex(u=>u.id===data.userId||u.loginId===data.loginId);
+    if(i>=0){users[i].password=pw;APP.users=users;}
+    closeM('m-forgot');
+    el('li-u').value=data.loginId||identity;
+    el('li-p').value='';
+    showToast('Password reset complete. Please sign in.');
+  }).catch(function(e){
+    showToast('Password reset failed: '+e.message,5000);
+  }).finally(function(){if(btn)btn.disabled=false;});
 }
 
 function openM(id){el(id).classList.remove('hidden');renderIcons(el(id));}
@@ -1300,8 +1366,7 @@ document.addEventListener('DOMContentLoaded',()=>{
   // Restore remembered credentials
   const remU=LS.get('ap_rem_u','');const remP=LS.get('ap_rem_p','');
   if(remU){el('li-u').value=remU;el('li-p').value=remP;var remCb=el('li-rem');if(remCb)remCb.checked=true;}
-  // Hide demo creds in production mode
-  if(!LS.get('ap_show_creds',true)){var dc=el('demo-creds');if(dc)dc.style.display='none';}
+  LS.set('ap_show_creds',false);
 });
 
 function doLogout(){
@@ -1481,8 +1546,8 @@ function addNotif(type,title,body,link,roles=['admin']){
   APP.notifications=ns;updateNotifBadge();
 }
 function sendEmail(to,subject,text,html,cc){
-  const recipients=Array.isArray(to)?to.filter(Boolean):String(to||'').split(/[;,]/).map(x=>x.trim()).filter(Boolean);
-  const ccList=Array.isArray(cc)?cc.filter(Boolean):String(cc||'').split(/[;,]/).map(x=>x.trim()).filter(Boolean);
+  const recipients=Array.isArray(to)?to.flatMap(splitEmailList):splitEmailList(to);
+  const ccList=Array.isArray(cc)?cc.flatMap(splitEmailList):splitEmailList(cc);
   if(!recipients.length){showToast('⚠ No email recipient found');return Promise.reject(new Error('No recipient'));}
   showToast('📧 Sending email...');
   return _apiFetch('/api/email',{method:'POST',body:JSON.stringify({to:recipients,cc:ccList,subject,text,html})}).then(function(){
@@ -1504,15 +1569,19 @@ function managementEmails(){
   const emails=APP.users.filter(u=>u.active!==false&&u.email&&(u.role==='admin'||u.role==='viewer')).map(u=>u.email);
   return [...new Set(emails)];
 }
+function splitEmailList(value){
+  return String(value||'').split(/\|\||[;,]/).map(x=>x.trim()).filter(x=>/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x));
+}
+function joinEmailList(value){return splitEmailList(value).join(', ');}
 function spocEmails(deptCode){
   const em=(APP.emailMaster||[]).find(x=>x.deptCode===deptCode&&x.status!=='inactive');
-  const emails=[em?.email].concat(APP.users.filter(u=>u.active!==false&&u.email&&u.role==='spoc'&&u.dept===deptCode).map(u=>u.email));
+  const emails=splitEmailList(em?.email).concat(APP.users.filter(u=>u.active!==false&&u.email&&u.role==='spoc'&&u.dept===deptCode).map(u=>u.email));
   return [...new Set(emails)];
 }
 function deptEmailRecord(deptCode){return (APP.emailMaster||[]).find(x=>x.deptCode===deptCode&&x.status!=='inactive')||{};}
-function deptManagerEmails(deptCode){const r=deptEmailRecord(deptCode);return [...new Set([r.reportingEmail].filter(Boolean))];}
-function deptHodEmails(deptCode){const r=deptEmailRecord(deptCode);return [...new Set([r.hodEmail].filter(Boolean))];}
-function deptManagementEmails(deptCode){const r=deptEmailRecord(deptCode);return [...new Set([r.managementEmail].filter(Boolean).concat(managementEmails()))];}
+function deptManagerEmails(deptCode){const r=deptEmailRecord(deptCode);return [...new Set(splitEmailList(r.reportingEmail))];}
+function deptHodEmails(deptCode){const r=deptEmailRecord(deptCode);return [...new Set(splitEmailList(r.hodEmail))];}
+function deptManagementEmails(deptCode){const r=deptEmailRecord(deptCode);return [...new Set(splitEmailList(r.managementEmail).concat(managementEmails()))];}
 function sendDeptReportEmail(code){
   const d=APP.depts.find(x=>x.code===code);if(!d)return;
   const df=filteredFindings().filter(f=>f.dept===code);
@@ -2895,9 +2964,28 @@ function saveEmailMaster(){
 function editEmailMaster(id){APP.editEmailRecord=(APP.emailMaster||[]).find(x=>x.id===id)||null;renderMdBody();}
 function deleteEmailMaster(id){confirmAct('Delete this email master record?',()=>{APP.emailMaster=APP.emailMaster.filter(x=>x.id!==id);renderMdBody();showToast('Deleted');});}
 function downloadEmailSample(){const ws=XLSX.utils.json_to_sheet([{SPOCName:'A. Gupta',EmailID:'spoc@example.com',DepartmentName:'Stores',ReportingToName:'Manager',ReportingToEmail:'manager@example.com',HODBUHEmail:'hod@example.com',ManagementEmail:'management@example.com',Status:'Active'}]);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Email Master');XLSX.writeFile(wb,'Email_Master_Sample.xlsx');}
+function deptCodeFromName(name){
+  const clean=String(name||'').trim().replace(/\s+/g,' ');
+  if(!clean)return '';
+  const existing=APP.depts.find(d=>d.name.toLowerCase()===clean.toLowerCase()||d.code.toLowerCase()===clean.toLowerCase());
+  if(existing)return existing.code;
+  let code=clean.toUpperCase().replace(/&/g,' AND ').replace(/[^A-Z0-9]+/g,' ').trim().split(/\s+/).map(w=>w[0]).join('').slice(0,5);
+  if(!code)code='DEPT';
+  const used=new Set(APP.depts.map(d=>d.code));
+  let base=code,n=2;while(used.has(code)){code=(base+n).slice(0,6);n++;}
+  return code;
+}
+function ensureEmailDept(name){
+  const clean=String(name||'').trim().replace(/\s+/g,' ');
+  let dept=APP.depts.find(d=>d.name.toLowerCase()===clean.toLowerCase()||d.code.toLowerCase()===clean.toLowerCase());
+  if(dept)return dept;
+  dept={id:'d_email_'+Date.now()+'_'+Math.random().toString(16).slice(2),code:deptCodeFromName(clean),name:clean,spoc:'TBD',risk:'Medium',freq:2,lastAudit:'-'};
+  const depts=APP.depts;depts.push(dept);APP.depts=depts;
+  return dept;
+}
 function importEmailMaster(evt){
   const file=evt.target.files[0];if(!file)return;const reader=new FileReader();
-  reader.onload=function(e){try{const wb=XLSX.read(e.target.result,{type:'array'});const data=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);let imported=0,errs=[];const rows=APP.emailMaster;data.forEach(function(row,i){const rn=i+2;const deptName=String(row.DepartmentName||row.Department||row.dept||'').trim();const dept=APP.depts.find(d=>d.name.toLowerCase()===deptName.toLowerCase()||d.code.toLowerCase()===deptName.toLowerCase());const email=String(row.EmailID||row.Email||row.email||'').trim();if(!dept){errs.push('Row '+rn+': department missing or invalid');return;}if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){errs.push('Row '+rn+': invalid email');return;}if(rows.some(r=>r.deptCode===dept.code&&r.email.toLowerCase()===email.toLowerCase())){errs.push('Row '+rn+': duplicate');return;}rows.unshift({id:'em_'+Date.now()+'_'+i,spocName:String(row.SPOCName||row['SPOC Name']||'').trim(),email,deptCode:dept.code,department:dept.name,reportingName:String(row.ReportingToName||row['Reporting To Name']||'').trim(),reportingEmail:String(row.ReportingToEmail||row['Reporting To Email']||'').trim(),hodEmail:String(row.HODBUHEmail||row['HOD/BUH Email']||'').trim(),managementEmail:String(row.ManagementEmail||row['Management Email']||'').trim(),status:String(row.Status||'Active').toLowerCase()==='inactive'?'inactive':'active',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()});imported++;});APP.emailMaster=rows;renderMdBody();showToast('Imported '+imported+' email records'+(errs.length?' / '+errs.length+' skipped':''),5000);}catch(err){showToast('Import failed: '+err.message);}};
+  reader.onload=function(e){try{const wb=XLSX.read(e.target.result,{type:'array'});const sheet=wb.Sheets['Email ID Database']||wb.Sheets[wb.SheetNames[0]];const data=XLSX.utils.sheet_to_json(sheet);let imported=0,updated=0,errs=[];const rows=APP.emailMaster;data.forEach(function(row,i){const rn=i+2;const deptName=String(row.DepartmentName||row.Department||row.dept||row['Department Name']||'').trim();if(!deptName){errs.push('Row '+rn+': department missing');return;}const dept=ensureEmailDept(deptName);const email=joinEmailList(row.EmailID||row.Email||row.email||row['Email Id']||row['Email ID']||'');const obj={id:'em_'+dept.code,spocName:String(row.SPOCName||row['SPOC Name']||'').trim(),email,deptCode:dept.code,department:dept.name,reportingName:String(row.ReportingToName||row['Reporting To Name']||row['Reporting To (Name)']||'').trim(),reportingEmail:joinEmailList(row.ReportingToEmail||row['Reporting To Email']||row['Reporting To (Email)']||''),hodEmail:joinEmailList(row.HODBUHEmail||row['HOD/BUH Email']||row['HOD/BUH Mail']||''),managementEmail:joinEmailList(row.ManagementEmail||row['Management Email']||''),status:String(row.Status||'Active').toLowerCase()==='inactive'?'inactive':'active',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};const idx=rows.findIndex(r=>r.deptCode===dept.code);if(idx>=0){obj.id=rows[idx].id;obj.createdAt=rows[idx].createdAt||obj.createdAt;rows[idx]=Object.assign({},rows[idx],obj);updated++;}else{rows.unshift(obj);imported++;}});APP.emailMaster=rows;renderMdBody();showToast('Imported '+imported+' email records, updated '+updated+(errs.length?' / '+errs.length+' skipped':''),5000);}catch(err){showToast('Import failed: '+err.message);}};
   reader.readAsArrayBuffer(file);
 }
 function renderEmailTemplates(canEdit){
@@ -2958,7 +3046,7 @@ function renderAdmBody(t='users'){
   <div><div class="lbl">Observation</div><input type="number" id="dd-obs" value="${APP.capaDueDays?.obs||45}" min="1" max="90" style="text-align:center;"></div>
 </div>
 <button class="btn btn-brand btn-sm mb3" onclick="APP.capaDueDays={critical:+el('dd-critical').value||7,major:+el('dd-major').value||15,minor:+el('dd-minor').value||30,obs:+el('dd-obs').value||45};LS.set('ap_capa_due',APP.capaDueDays);showToast('✅ Due days saved')">Save Due Day Settings</button>
-<div class="ch"><span class="dot" style="background:var(--brand)"></span>System Settings</div>${[['Show Login Credentials on Login Page',LS.get('ap_show_creds',true)],['Email Notifications (in-app alerts to all roles when findings/CAPAs change)',true],['Auto-escalation Rules',true],['Require Evidence for NCs',true],['Allow Auditors to Delete Findings',false],['SPOC Comment Required for Closure',true]].map(([l,v])=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--bg3);font-size:13px;">${l}<label class="tgsw"><input type="checkbox" ${v?'checked':''}><span class="tgtr"></span></label></div>`).join('')}<button class="btn btn-brand btn-sm mt3" onclick="saveSystemSettings()">Save Settings</button><div class="mt3" style="border-top:1px solid var(--border);padding-top:12px;"><div class="ch"><span class="dot" style="background:var(--red)"></span>Danger Zone</div><div class="flex g2u fw">
+<div class="ch"><span class="dot" style="background:var(--brand)"></span>System Settings</div>${[['Email Notifications (in-app alerts to all roles when findings/CAPAs change)',true],['Auto-escalation Rules',true],['Require Evidence for NCs',true],['Allow Auditors to Delete Findings',false],['SPOC Comment Required for Closure',true]].map(([l,v])=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--bg3);font-size:13px;">${l}<label class="tgsw"><input type="checkbox" ${v?'checked':''}><span class="tgtr"></span></label></div>`).join('')}<button class="btn btn-brand btn-sm mt3" onclick="saveSystemSettings()">Save Settings</button><div class="mt3" style="border-top:1px solid var(--border);padding-top:12px;"><div class="ch"><span class="dot" style="background:var(--red)"></span>Danger Zone</div><div class="flex g2u fw">
 <button class="btn btn-danger btn-sm" onclick="resetAll()">🔄 Reset All Data (Password Required)</button>
 <button class="btn btn-brand btn-sm" onclick="exportAll()">📦 Export Full Backup (.json)</button>
 <button class="btn btn-brand btn-sm" onclick="navigate('ocp')">📘 View OCP Manual</button>
@@ -2978,12 +3066,8 @@ function resetUserPw(id){
   const U=APP.users;const usr=U.find(x=>x.id===id);if(usr){usr.password=np;APP.users=U;showToast('✅ Password reset for '+u.name);}
 }
 function saveSystemSettings(){
-  // Read all toggles
-  var toggles=document.querySelectorAll('#adm-body .tgsw input[type=checkbox]');
-  if(toggles.length>0){
-    LS.set('ap_show_creds',toggles[0].checked);
-  }
-  showToast('✅ Settings saved');
+  LS.set('ap_show_creds',false);
+  showToast('Settings saved');
 }
 function togglePerm(role,page,val){if(role==='admin')return;PERMS[role][page]=val?1:0;buildNav();showToast('Permission updated');}
 function openUserModal(id){const u=id?APP.users.find(x=>x.id===id):null;el('usr-mtitle').textContent=u?'Edit User':'Add User';el('usr-name').value=u?.name||'';el('usr-lid').value=u?.loginId||'';el('usr-pw').value=u?.password||'';el('usr-role').value=u?.role||'auditor';el('usr-email').value=u?.email||'';el('usr-eid').value=u?.id||'';populateDeptSel('usr-dept');if(u)el('usr-dept').value=u.dept||'';openM('m-user');}
@@ -4452,7 +4536,7 @@ function downloadCompletionPDF(){
 
 
 // Network status detection
-window.addEventListener('load',function(){renderIcons(document.body);});
+window.addEventListener('load',function(){renderIcons(document.body);startIconObserver();});
 window.addEventListener('online',function(){_syncStatus='connecting';_updateSyncUI();if(!_syncInitDone)initApiSync();else pollApiSync();});
 window.addEventListener('offline',function(){_syncStatus='offline';_updateSyncUI();});
 console.log('[ONEPWS AuditPro v4.5 MongoDB Sync] Standards engine loaded ✅ — AS9100D/ISO9001/14001/45001 checklist engine active');
