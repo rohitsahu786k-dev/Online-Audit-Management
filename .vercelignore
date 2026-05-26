@@ -1,0 +1,6 @@
+.env
+node_modules/
+npm-debug.log*
+*.log
+auditpro-server*.log
+ONEPWS_Backup_*.json

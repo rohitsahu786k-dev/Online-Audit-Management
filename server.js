@@ -38,12 +38,12 @@ const SYNC_KEYS = [
   'ap_email_logs',
   'ap_escalation_matrix'
 ];
+const PASSWORD_RESET_KEY = '_password_reset_otps';
 
 let mongoClient;
 let appData;
 let mongoConnectPromise;
 let mailer;
-const passwordResetOtps = new Map();
 
 app.use(express.json({ limit: '50mb' }));
 
@@ -124,6 +124,46 @@ function cleanIdentity(input) {
 
 function hashOtp(userId, otp) {
   return crypto.createHash('sha256').update(`${userId}:${otp}:${SMTP_PASS || 'auditpro'}`).digest('hex');
+}
+
+async function getPasswordResetRows(collection) {
+  const row = await collection.findOne({ key: PASSWORD_RESET_KEY });
+  return Array.isArray(row && row.value) ? row.value : [];
+}
+
+async function savePasswordResetOtp(collection, userId, otpHash, expiresAt) {
+  const now = Date.now();
+  const rows = (await getPasswordResetRows(collection))
+    .filter(row => row && row.userId !== userId && Number(row.expiresAt) > now);
+
+  rows.push({ userId, otpHash, expiresAt, attempts: 0 });
+
+  await collection.updateOne(
+    { key: PASSWORD_RESET_KEY },
+    { $set: { key: PASSWORD_RESET_KEY, value: rows, updatedAt: new Date(), updatedBy: 'password-reset' } },
+    { upsert: true }
+  );
+}
+
+async function updatePasswordResetOtp(collection, userId, patch) {
+  const rows = (await getPasswordResetRows(collection)).map(row => (
+    row && row.userId === userId ? Object.assign({}, row, patch) : row
+  ));
+
+  await collection.updateOne(
+    { key: PASSWORD_RESET_KEY },
+    { $set: { key: PASSWORD_RESET_KEY, value: rows, updatedAt: new Date(), updatedBy: 'password-reset' } },
+    { upsert: true }
+  );
+}
+
+async function deletePasswordResetOtp(collection, userId) {
+  const rows = (await getPasswordResetRows(collection)).filter(row => row && row.userId !== userId);
+  await collection.updateOne(
+    { key: PASSWORD_RESET_KEY },
+    { $set: { key: PASSWORD_RESET_KEY, value: rows, updatedAt: new Date(), updatedBy: 'password-reset' } },
+    { upsert: true }
+  );
 }
 
 async function getUsersRecord() {
@@ -287,18 +327,14 @@ app.post('/api/auth/forgot-password', wrapAsync(async (req, res) => {
   const identity = cleanIdentity(req.body && req.body.identity);
   if (!identity) return res.status(400).json({ ok: false, error: 'Login ID or email is required' });
 
-  const { users } = await getUsersRecord();
+  const { collection, users } = await getUsersRecord();
   const user = findUserByIdentity(users, identity);
   if (!user || !user.email) {
     return res.status(404).json({ ok: false, error: 'No active account found with a registered email' });
   }
 
   const otp = String(crypto.randomInt(100000, 1000000));
-  passwordResetOtps.set(user.id, {
-    otpHash: hashOtp(user.id, otp),
-    expiresAt: Date.now() + (15 * 60 * 1000),
-    attempts: 0
-  });
+  await savePasswordResetOtp(collection, user.id, hashOtp(user.id, otp), Date.now() + (15 * 60 * 1000));
 
   const transport = getMailer();
   const subject = 'ONEPWS AuditPro password reset OTP';
@@ -334,17 +370,19 @@ app.post('/api/auth/reset-password', wrapAsync(async (req, res) => {
   const user = findUserByIdentity(users, identity);
   if (!user) return res.status(404).json({ ok: false, error: 'No active account found' });
 
-  const reset = passwordResetOtps.get(user.id);
+  const resets = await getPasswordResetRows(collection);
+  const reset = resets.find(row => row && row.userId === user.id);
   if (!reset || reset.expiresAt < Date.now()) {
-    passwordResetOtps.delete(user.id);
+    await deletePasswordResetOtp(collection, user.id);
     return res.status(400).json({ ok: false, error: 'OTP expired. Please request a new OTP' });
   }
 
   reset.attempts += 1;
   if (reset.attempts > 5) {
-    passwordResetOtps.delete(user.id);
+    await deletePasswordResetOtp(collection, user.id);
     return res.status(429).json({ ok: false, error: 'Too many OTP attempts. Please request a new OTP' });
   }
+  await updatePasswordResetOtp(collection, user.id, { attempts: reset.attempts });
 
   if (reset.otpHash !== hashOtp(user.id, otp)) {
     return res.status(400).json({ ok: false, error: 'Invalid OTP' });
@@ -357,7 +395,7 @@ app.post('/api/auth/reset-password', wrapAsync(async (req, res) => {
     { $set: { key: 'ap_users', value: nextUsers, updatedAt: now, updatedBy: 'password-reset' } },
     { upsert: true }
   );
-  passwordResetOtps.delete(user.id);
+  await deletePasswordResetOtp(collection, user.id);
 
   res.json({ ok: true, userId: user.id, loginId: user.loginId, updatedAt: now });
 }));
@@ -378,6 +416,10 @@ async function shutdown() {
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
-app.listen(PORT, () => {
-  console.log(`[AuditPro] Server running at http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`[AuditPro] Server running at http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;
