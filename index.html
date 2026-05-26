@@ -9,6 +9,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.6.0/jspdf.plugin.autotable.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://unpkg.com/lucide@latest"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -62,6 +63,7 @@ html,body{height:100%;font-family:var(--font);background:var(--bg);color:var(--t
 .sb-logo-txt{display:none;}
 .icon-inline,.ico-svg{width:15px;height:15px;display:inline-flex;align-items:center;justify-content:center;vertical-align:-2px;flex-shrink:0;}
 .icon-inline svg,.ico-svg svg,svg.ico-svg{width:15px;height:15px;stroke-width:2;}
+.btn svg,.nbell svg{pointer-events:none;}
 .btn .icon-inline,.btn .ico-svg{width:14px;height:14px;}
 .btn-icon .ico-svg,.btn-icon svg.ico-svg{width:17px;height:17px;}
 .ni .ico{width:17px;height:17px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
@@ -174,7 +176,7 @@ input:focus,select:focus,textarea:focus{border-color:var(--brand);background:var
 .fcard.major{border-left-color:var(--amber);}
 .fcard.minor{border-left-color:var(--teal);}
 .capa-item.active{background:var(--brand-l);border-color:#fca5a5;box-shadow:0 6px 16px rgba(192,57,43,.08);}
-.capa-tools{display:grid;grid-template-columns:1fr 130px;gap:7px;margin-bottom:10px;}
+.capa-tools{display:grid;grid-template-columns:1fr 130px 130px;gap:7px;margin-bottom:10px;}
 .capa-list{max-height:560px;overflow:auto;padding-right:2px;}
 .capa-ref{font-size:13px;font-weight:900;color:var(--text);}
 .capa-empty{padding:12px;border:1px dashed var(--border2);border-radius:8px;color:var(--text3);font-size:12px;text-align:center;background:var(--bg3);}
@@ -207,9 +209,13 @@ input:focus,select:focus,textarea:focus{border-color:var(--brand);background:var
 .ocp-content{font-size:12px;line-height:1.8;max-height:60vh;overflow-y:auto;background:var(--bg3);border-radius:8px;padding:14px;color:var(--text2);}
 .ocp-content h3{font-size:13px;font-weight:800;color:var(--text);margin:12px 0 4px;border-bottom:1px solid var(--border);padding-bottom:3px;}
 .ocp-content h3:first-child{margin-top:0;}
+.ocp-viewer{background:#f8fafc;border:1px solid var(--border);border-radius:8px;overflow:hidden;}
+.ocp-toolbar{display:flex;gap:7px;align-items:center;justify-content:space-between;flex-wrap:wrap;background:var(--bg2);border-bottom:1px solid var(--border);padding:8px;}
+.ocp-canvas-wrap{height:calc(100vh - 210px);min-height:520px;overflow:auto;text-align:center;padding:12px;background:#e5e7eb;}
+.ocp-canvas-wrap canvas{max-width:100%;height:auto;background:#fff;box-shadow:0 8px 28px rgba(15,23,42,.18);}
 
 /* ─── NOTIF PANEL ──────────────────────── */
-.npanel{position:fixed;top:52px;right:10px;width:320px;max-height:440px;background:var(--bg2);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-md);z-index:400;display:flex;flex-direction:column;}
+.npanel{position:fixed;top:52px;right:10px;width:320px;max-height:440px;background:var(--bg2);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-md);z-index:1200;display:flex;flex-direction:column;}
 .npanel.hidden{display:none!important;}
 .nph{padding:10px 13px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;}
 .nlist{flex:1;overflow-y:auto;}
@@ -380,14 +386,13 @@ input:focus,select:focus,textarea:focus{border-color:var(--brand);background:var
   <div class="lc">
     <div class="lc-logo">
       <img id="login-logo" src="" alt="ONEPWS">
-      <h2>ONEPWS Pvt. Ltd.</h2>
       <p>Integrated Quality Audit Management Portal · AS9100D</p>
     </div>
     <div class="lerr" id="lerr">Invalid credentials. Please try again.</div>
     <div class="lf"><label>Login ID</label><input id="li-u" placeholder="Enter login ID" autocomplete="username"></div>
     <div class="lf"><label>Password</label>
       <div style="position:relative;"><input id="li-p" type="password" placeholder="Enter password" autocomplete="current-password" style="padding-right:42px;">
-        <button id="pw-toggle" type="button" class="btn btn-ghost btn-icon" aria-label="Show password" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);width:28px;height:28px;padding:0;"><i data-lucide="eye" class="ico-svg"></i></button>
+        <button id="pw-toggle" type="button" class="btn btn-ghost btn-icon" aria-label="Show password" onclick="togglePassword(event)" onmousedown="event.preventDefault()" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);width:28px;height:28px;padding:0;"><i data-lucide="eye" class="ico-svg"></i></button>
       </div>
     </div>
     <div class="fb" style="margin-bottom:10px;">
@@ -419,7 +424,7 @@ input:focus,select:focus,textarea:focus{border-color:var(--brand);background:var
     <div class="topbar">
       <div class="tl">
         <button class="btn btn-ghost btn-icon ham" onclick="toggleSidebar()" title="Menu"><i data-lucide="menu" class="ico-svg"></i></button>
-        <div><div class="ttitle" id="ptitle">Dashboard</div><div class="tsub" id="psub">ONEPWS Pvt. Ltd.</div></div>
+        <div><div class="ttitle" id="ptitle">Dashboard</div><div class="tsub" id="psub">Integrated QMS Portal</div></div>
       </div>
       <div class="flex g2u" id="date-range-bar" style="font-size:11px;">
         <span class="td">From:</span><input type="date" id="dr-from" style="width:110px;padding:4px 5px;font-size:10px;" onchange="setDateFilter(this.value,APP.dateTo)">
@@ -428,8 +433,8 @@ input:focus,select:focus,textarea:focus{border-color:var(--brand);background:var
         <button class="btn btn-ghost btn-sm" style="padding:3px 6px;font-size:10px;" onclick="clearDateFilter()"><i data-lucide="x" class="ico-svg"></i>Clear</button>
       </div>
       <div class="tr">
-        <div class="nbell" onclick="toggleNotif()" title="Notifications"><i data-lucide="bell" class="ico-svg"></i><span class="nbadge hidden" id="nbadge">0</span></div>
-        <button class="btn btn-ghost btn-sm" onclick="window.print()" title="Print this page"><i data-lucide="printer" class="ico-svg"></i></button>
+        <div class="nbell" id="notif-btn" onclick="toggleNotif(event)" title="Notifications"><i data-lucide="bell" class="ico-svg"></i><span class="nbadge hidden" id="nbadge">0</span></div>
+        <button class="btn btn-ghost btn-sm" onclick="printPage()" title="Print this page"><i data-lucide="printer" class="ico-svg"></i></button>
         <button class="btn btn-brand btn-sm" id="tbtn" onclick="topAct()">+ Action</button>
         <span id="sync-indicator" style="font-size:9px;padding:2px 6px;border-radius:10px;background:var(--bg3);font-weight:600;letter-spacing:0.3px;">◌ MongoDB...</span> <button class="btn btn-ghost btn-sm" onclick="doLogout()">Logout</button>
       </div>
@@ -584,9 +589,9 @@ input:focus,select:focus,textarea:focus{border-color:var(--brand);background:var
 <!-- OCP MODAL -->
 <div class="mbg hidden" id="m-ocp">
   <div class="modal wide">
-    <div class="mh">📘 Operating Control Procedure (OCP) — ONEPWS AuditPro v4.5 <button class="btn btn-ghost btn-icon btn-sm" onclick="closeM('m-ocp')">✕</button></div>
+    <div class="mh">📘 Operating Control Procedure (OCP) <button class="btn btn-ghost btn-icon btn-sm" onclick="closeM('m-ocp')">✕</button></div>
     <div class="ocp-content" id="ocp-body"></div>
-    <div class="mt2 flex g2u"><button class="btn btn-brand btn-sm" onclick="downloadOCPPDF()">📄 Download OCP PDF</button><button class="btn btn-ghost btn-sm" onclick="closeM('m-ocp')">Close</button></div>
+    <div class="mt2 flex g2u"><button class="btn btn-ghost btn-sm" onclick="closeM('m-ocp')">Close</button></div>
   </div>
 </div>
 
@@ -613,6 +618,8 @@ input:focus,select:focus,textarea:focus{border-color:var(--brand);background:var
 // LOGO (embedded base64 - set at runtime)
 // ═══════════════════════════════════════════════════
 const LOGO_SRC = 'assets/onepws-dark-logo-scaled.png';
+const OCP_PDF_SRC = 'assets/OCP_Manual_v4.3_Complete.pdf';
+const REQUIRED_CC_EMAIL = 'process@onepws.com';
 
 // ═══════════════════════════════════════════════════
 // LOCALSTORAGE HELPERS
@@ -896,6 +903,9 @@ const APP={
   mdCpPage:1,
   admTab:'users',
   reportDeptFilter:'all',
+  reportStatusFilter:'closed',
+  capaDeptFilter:'',
+  capaStatusFilter:'',
 };
 
 // Audit session state (in-memory + persisted)
@@ -1013,7 +1023,7 @@ const PAGE_META={
   mytasks:     {title:'My Pending Tasks',      sub:'Personalized task view',act:'Refresh'},
   managerpanel:{title:'Manager Console',       sub:'Department NC review and escalation control',act:'Send Summary'},
   mastertracker:{title:'Master Tracker',       sub:'Central findings, CAPA & learnings',act:'Export All'},
-  ocp:         {title:'OCP Manual',           sub:'Operating Control Procedure — ONEPWS AuditPro',act:'Download PDF'},
+  ocp:         {title:'OCP Manual',           sub:'Viewer access only',act:'View Manual'},
   importdata:  {title:'Bulk Import',           sub:'Import findings/checkpoints/learnings via Excel',act:'Import Excel'},
 };
 
@@ -1245,8 +1255,14 @@ function qs(sel){return document.querySelector(sel);}
 let toastTmr;
 function showToast(msg,dur=3200){const t=el('toast');t.textContent=msg;renderIcons(t);t.classList.add('show');clearTimeout(toastTmr);toastTmr=setTimeout(()=>t.classList.remove('show'),dur);}
 
+function printPage(){
+  showToast('Preparing print preview...',1200);
+  setTimeout(function(){window.focus();window.print();},80);
+}
+
 function togglePassword(evt){
   if(evt&&evt.preventDefault)evt.preventDefault();
+  if(evt&&evt.stopPropagation)evt.stopPropagation();
   var p=el('li-p');var t=el('pw-toggle');if(!p||!t)return;
   p.type=p.type==='password'?'text':'password';
   t.setAttribute('aria-label',p.type==='password'?'Show password':'Hide password');
@@ -1399,7 +1415,6 @@ document.addEventListener('DOMContentLoaded',()=>{
   }
   // Enter key on login
   ['li-u','li-p'].forEach(id=>el(id)?.addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();}));
-  el('pw-toggle')?.addEventListener('click',togglePassword);
   el('forgot-btn')?.addEventListener('click',openForgotModal);
   // Restore remembered credentials
   const remU=LS.get('ap_rem_u','');const remP=LS.get('ap_rem_p','');
@@ -1501,7 +1516,7 @@ function renderPage(page){
     masterdata:renderMasterdata,adminpanel:renderAdmin,
     mytasks:renderMytasks,managerpanel:renderManagerPanel,mastertracker:renderMasterTracker,
     importdata:renderImport,
-    ocp:function(){return '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><div class="ch" style="margin:0"><span class="dot" style="background:var(--brand)"></span>Operating Control Procedure — ONEPWS AuditPro v4.5</div><span class="badge b-purple">View Only</span></div><div id="ocp-body" class="ocp-content" style="max-height:none;"></div></div>';},
+    ocp:function(){return '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><div class="ch" style="margin:0"><span class="dot" style="background:var(--brand)"></span>Operating Control Procedure</div><span class="badge b-purple">View Only</span></div><div id="ocp-body" class="ocp-content" style="max-height:none;"></div></div>';},
 
   };
   const fn=renderers[page];
@@ -1511,6 +1526,7 @@ function renderPage(page){
   if(page==='planning'){initCalendar();setTimeout(initDateDefaults,50);}
   if(page==='findings'){if(APP.currentUser?.role==='spoc'&&APP.currentUser?.dept){APP.findingsDeptFilter=APP.currentUser.dept;setTimeout(function(){var dd=el('f-dept');if(dd){dd.value=APP.currentUser.dept;dd.disabled=true;}},100);}renderFindingsTable();}
   if(page==='mastertracker')renderTrackerBody();
+  if(page==='capa')setTimeout(filterCapaList,30);
   if(page==='masterdata')renderMdContent();
   if(page==='adminpanel')renderAdminContent();
   if(page==='ocp')buildOCPContent();
@@ -1537,7 +1553,7 @@ function topAct(){
     managerpanel:()=>managerSendSummary(),
     mastertracker:()=>downloadTrackerExcel(),
     importdata:()=>el('im-file')?.click(),
-    ocp:()=>downloadOCPPDF(),
+    ocp:()=>navigate('ocp'),
   };
   acts[APP.currentPage]?.();
 }
@@ -1556,7 +1572,8 @@ function updateNotifBadge(){
   const n=APP.notifications.filter(x=>!x.read&&x.roles.includes(role)).length;
   const b=el('nbadge');b.textContent=n;b.classList.toggle('hidden',n===0);
 }
-function toggleNotif(){
+function toggleNotif(evt){
+  if(evt&&evt.stopPropagation)evt.stopPropagation();
   const p=el('npanel');p.classList.toggle('hidden');
   if(!p.classList.contains('hidden'))renderNotifs();
 }
@@ -1585,13 +1602,38 @@ function addNotif(type,title,body,link,roles=['admin']){
   ns.unshift({id:'n'+Date.now(),type,title,body,ts:new Date().toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'}),read:false,link,roles});
   APP.notifications=ns;updateNotifBadge();
 }
+function appDashboardUrl(){
+  return (location.origin||'').replace(/\/$/,'')+'/#dashboard';
+}
+function requiredCcEmails(toList){
+  const toSet=new Set((toList||[]).map(x=>String(x).toLowerCase()));
+  const managers=(APP.users||[]).filter(u=>u.active!==false&&u.email&&u.role==='manager').map(u=>u.email);
+  return [...new Set([REQUIRED_CC_EMAIL].concat(managers).filter(Boolean))]
+    .filter(email=>!toSet.has(String(email).toLowerCase()));
+}
+function addEmailDashboardAccess(text,html){
+  const url=appDashboardUrl();
+  const linkHtml='<p style="margin-top:14px;"><a href="'+sanitize(url)+'" style="background:#c0392b;color:#fff;text-decoration:none;padding:9px 14px;border-radius:6px;font-weight:700;display:inline-block;">Visit / Login to Dashboard</a></p>';
+  const linkText='\n\nVisit / Login to Dashboard: '+url;
+  let nextHtml=html;
+  if(nextHtml&&!/Visit \/ Login to Dashboard/i.test(nextHtml)){
+    const regards=/Regards,\s*<br\s*\/?>\s*Audit Team/i;
+    nextHtml=regards.test(nextHtml)?nextHtml.replace(regards,function(m){return m+linkHtml;}):nextHtml+linkHtml;
+  }
+  let nextText=text||'';
+  if(nextText&&!/Visit \/ Login to Dashboard/i.test(nextText))nextText+=linkText;
+  return {text:nextText,html:nextHtml};
+}
 function sendEmail(to,subject,text,html,cc){
   const recipients=Array.isArray(to)?to.flatMap(splitEmailList):splitEmailList(to);
-  const ccList=Array.isArray(cc)?cc.flatMap(splitEmailList):splitEmailList(cc);
+  let ccList=Array.isArray(cc)?cc.flatMap(splitEmailList):splitEmailList(cc);
+  ccList=[...new Set(ccList.concat(requiredCcEmails(recipients)))];
+  const body=addEmailDashboardAccess(text,html);
   if(!recipients.length){showToast('⚠ No email recipient found');return Promise.reject(new Error('No recipient'));}
   showToast('📧 Sending email...');
-  return _apiFetch('/api/email',{method:'POST',body:JSON.stringify({to:recipients,cc:ccList,subject,text,html})}).then(function(){
+  return _apiFetch('/api/email',{method:'POST',body:JSON.stringify({to:recipients,cc:ccList,subject,text:body.text,html:body.html})}).then(function(){
     showToast('✅ Email sent');
+    return {to:recipients,cc:ccList};
   }).catch(function(e){
     showToast('❌ Email failed: '+e.message);
     throw e;
@@ -1601,9 +1643,12 @@ function logEmail(type,to,cc,subject,status,attachment,error){
   const logs=APP.emailLogs;
   logs.unshift({id:'elog_'+Date.now()+'_'+Math.random().toString(16).slice(2),type:type,to:(to||[]).join(', '),cc:(cc||[]).join(', '),subject:subject,status:status,sentAt:new Date().toISOString(),attachment:attachment||'',retryCount:0,error:error||''});
   APP.emailLogs=logs.slice(0,500);
+  if(_apiReady){
+    _apiFetch('/api/sync/ap_email_logs',{method:'PUT',body:JSON.stringify({value:APP.emailLogs,by:(APP.currentUser&&APP.currentUser.loginId)||'email-log'})}).catch(function(e){console.warn('Email log sync:',e.message);});
+  }
 }
 function sendLoggedEmail(type,to,cc,subject,text,html,attachment){
-  return sendEmail(to,subject,text,html,cc).then(function(){logEmail(type,to,cc,subject,'sent',attachment,'');return true;}).catch(function(e){logEmail(type,to,cc,subject,'failed',attachment,e.message);return false;});
+  return sendEmail(to,subject,text,html,cc).then(function(info){logEmail(type,info.to,info.cc,subject,'sent',attachment,'');return true;}).catch(function(e){const recipients=Array.isArray(to)?to.flatMap(splitEmailList):splitEmailList(to);const ccList=(Array.isArray(cc)?cc.flatMap(splitEmailList):splitEmailList(cc)).concat(requiredCcEmails(recipients));logEmail(type,recipients,[...new Set(ccList)],subject,'failed',attachment,e.message);return false;});
 }
 function managementEmails(){
   const emails=APP.users.filter(u=>u.active!==false&&u.email&&(u.role==='admin'||u.role==='viewer')).map(u=>u.email);
@@ -1631,14 +1676,14 @@ function sendDeptReportEmail(code){
   const text='Department: '+d.name+'\nCompliance Score: '+score+'%\nFindings: '+df.length+'\nOpen CAPA: '+df.filter(f=>f.status!=='closed').length+'\n\nPlease open ONEPWS AuditPro for PDF/Excel report details.';
   const rows=df.slice(0,12).map(f=>'<tr><td>'+sanitize(f.ref)+'</td><td>'+sanitize(f.desc)+'</td><td>'+sanitize(SEV_LABEL[f.sev]||f.sev)+'</td><td>'+sanitize(STAT_LABEL[f.status]||f.status)+'</td></tr>').join('');
   const html='<h3>ONEPWS Audit Report - '+sanitize(d.name)+'</h3><p><b>Compliance Score:</b> '+score+'%<br><b>Total Findings:</b> '+df.length+'</p><table border="1" cellpadding="6" cellspacing="0"><thead><tr><th>ID</th><th>Description</th><th>Severity</th><th>Status</th></tr></thead><tbody>'+(rows||'<tr><td colspan="4">No findings</td></tr>')+'</tbody></table>';
-  return sendEmail(to,subject,text,html);
+  return sendLoggedEmail('dept_report',to,deptManagerEmails(code),subject,text,html,'');
 }
 function sendCapaReminder(key){
   const f=findCapa(key);if(!f)return;
   const to=spocEmails(f.dept);
   const subject='CAPA Reminder - '+f.ref+' - '+(f.deptName||f.dept);
   const text='CAPA reminder for '+f.ref+'\nDepartment: '+(f.deptName||f.dept)+'\nSeverity: '+(SEV_LABEL[f.sev]||f.sev)+'\nDue: '+(f.due||'Not set')+'\nStatus: '+(STAT_LABEL[f.status]||f.status)+'\n\nFinding: '+(f.desc||'')+'\n\nPlease update closure evidence in ONEPWS AuditPro.';
-  return sendEmail(to,subject,text);
+  return sendLoggedEmail('capa_reminder',to,deptManagerEmails(f.dept),subject,text,'','');
 }
 document.addEventListener('click',e=>{
   const p=el('npanel');
@@ -2452,8 +2497,27 @@ function removeFile(cid,idx){
 // ═══════════════════════════════════════════════════
 // REPORTS
 // ═══════════════════════════════════════════════════
+function reportFindingsForDept(code){
+  let rows=filteredFindings().filter(f=>f.dept===code);
+  const status=APP.reportStatusFilter||'closed';
+  if(status==='open')rows=rows.filter(f=>f.status!=='closed');
+  if(status==='closed')rows=rows.filter(f=>f.status==='closed');
+  return rows;
+}
+function reportDeptList(){
+  if(APP.currentUser?.role==='spoc')return APP.depts.filter(d=>d.code===APP.currentUser?.dept);
+  return APP.reportDeptFilter&&APP.reportDeptFilter!=='all'?APP.depts.filter(d=>d.code===APP.reportDeptFilter):APP.depts;
+}
+function setReportStatusFilter(status){
+  APP.reportStatusFilter=status||'closed';
+  APP.reportDeptFilter=APP.reportDeptFilter||'all';
+  renderPage('reports');
+}
 function renderReports(){
   const stds=APP.standards.map(id=>AUDIT_STANDARDS.find(s=>s.id===id)?.label||id).join(' + ');
+  const activeStatus=APP.reportStatusFilter||'closed';
+  const statusBtns=[['all','All'],['open','Open'],['closed','Close']];
+  const visibleDepts=reportDeptList();
   return`
   <div class="card sg">
     <div class="ch"><span class="dot" style="background:var(--brand)"></span>Active Audit Standards: <span style="color:var(--brand);font-weight:800;">${stds}</span></div>
@@ -2466,12 +2530,16 @@ function renderReports(){
       </div>
     </div>
   </div>
+  <div class="ch sg"><span class="dot" style="background:var(--green)"></span>Audit Status Filter</div>
+  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
+    ${statusBtns.map(([val,label])=>`<button class="btn ${activeStatus===val?'btn-brand':'btn-ghost'} btn-sm" onclick="setReportStatusFilter('${val}')">${label}</button>`).join('')}
+  </div>
   <div class="ch sg"><span class="dot" style="background:var(--accent)"></span>Department-wise Reports</div>
   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
-    ${APP.currentUser?.role==="spoc"?"":"<div class=\"badge b-brand\" id=\"rpt-btn-all\" style=\"cursor:pointer;padding:5px 10px;font-size:11px;\" onclick=\"filterReportDept('all')\">All Depts</div>"}
-    ${(APP.currentUser?.role==="spoc"?APP.depts.filter(d=>d.code===APP.currentUser?.dept):APP.depts).map(d=>`<div class="badge b-gray rpt-dept-btn" id="rpt-btn-${d.code}" style="cursor:pointer;padding:5px 10px;font-size:11px;" onclick="filterReportDept('${d.code}')">${d.code}</div>`).join('')}
+    ${APP.currentUser?.role==="spoc"?"":`<div class="badge ${APP.reportDeptFilter==='all'?'b-brand':'b-gray'}" id="rpt-btn-all" style="cursor:pointer;padding:5px 10px;font-size:11px;" onclick="filterReportDept('all')">All Depts</div>`}
+    ${(APP.currentUser?.role==="spoc"?APP.depts.filter(d=>d.code===APP.currentUser?.dept):APP.depts).map(d=>`<div class="badge ${APP.reportDeptFilter===d.code?'b-brand':'b-gray'} rpt-dept-btn" id="rpt-btn-${d.code}" style="cursor:pointer;padding:5px 10px;font-size:11px;" onclick="filterReportDept('${d.code}')">${d.code}</div>`).join('')}
   </div>
-  <div class="grid g3 sg" id="report-cards">${genReportCards(APP.currentUser?.role==='spoc'?APP.depts.filter(d=>d.code===APP.currentUser?.dept):APP.depts)}</div>
+  <div class="grid g3 sg" id="report-cards">${genReportCards(visibleDepts)}</div>
   <div id="report-preview" class="hidden"></div>`;
 }
 function toggleStdReport(id){
@@ -2496,7 +2564,7 @@ function searchReports(q){
 }
 function genReportCards(depts){
   return depts.map(d=>{
-    const df=filteredFindings().filter(f=>f.dept===d.code);
+    const df=reportFindingsForDept(d.code);
     const c=df.filter(f=>f.sev==='critical').length;
     const ma=df.filter(f=>f.sev==='major').length;
     const mi=df.filter(f=>f.sev==='minor').length;
@@ -2516,7 +2584,7 @@ function genReportCards(depts){
 }
 function showDeptReport(code){
   const d=APP.depts.find(x=>x.code===code);if(!d)return;
-  const df=filteredFindings().filter(f=>f.dept===code);
+  const df=reportFindingsForDept(code);
   const c=df.filter(f=>f.sev==='critical').length,ma=df.filter(f=>f.sev==='major').length,mi=df.filter(f=>f.sev==='minor').length;
   const score=auditScore(df),sc=score>=80?'green':score>=60?'amber':'red';
   const stds=APP.standards.map(id=>AUDIT_STANDARDS.find(s=>s.id===id)?.label||id).join(' + ');
@@ -2587,7 +2655,7 @@ function showDeptReport(code){
 }
 function genDeptPDF(code){
   if(!window.jspdf){showToast('PDF loading...');return;}
-  const d=APP.depts.find(x=>x.code===code);const df=filteredFindings().filter(f=>f.dept===code);
+  const d=APP.depts.find(x=>x.code===code);const df=reportFindingsForDept(code);
   const{jsPDF}=window.jspdf;const doc=new jsPDF();const pw=doc.internal.pageSize.getWidth();
   const c_=df.filter(f=>f.sev==='critical').length;
   const ma=df.filter(f=>f.sev==='major').length;
@@ -2713,7 +2781,7 @@ function genDeptPDF(code){
 }
 function genDeptExcel(code){
   if(!window.XLSX){showToast('Excel loading...');return;}
-  const d=APP.depts.find(x=>x.code===code);const df=filteredFindings().filter(f=>f.dept===code);
+  const d=APP.depts.find(x=>x.code===code);const df=reportFindingsForDept(code);
   const ws=XLSX.utils.json_to_sheet(df.map(f=>({ID:f.ref,Department:f.deptName,Description:f.desc,Severity:SEV_LABEL[f.sev],Clause:f.clause,DueDate:f.due,Status:STAT_LABEL[f.status],CAPAStatus:STAT_LABEL[f.capaStatus||f.status]})));
   const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,(d?.name||code).substring(0,31));
   XLSX.writeFile(wb,`ONEPWS_${(d?.name||code).replace(/\s+/g,'_')}_Audit.xlsx`);showToast('📊 Excel downloaded!');
@@ -2804,7 +2872,8 @@ function exportFindingsExcel(){
 // ═══════════════════════════════════════════════════
 function renderCapa(){
   const F=filterByDateRange(APP.findings,'due');const uRole=APP.currentUser?.role;const uDept=APP.currentUser?.dept||'';const scoped=(uRole==='spoc')?F.filter(f=>f.dept===uDept):(uRole==='manager'?F.filter(f=>managerDeptCodes().includes(f.dept)):F);const open=scoped.filter(f=>f.status!=='closed');
-  const active=findCapa(APP.activeCapaId,scoped)||open[0]||null;if(active)APP.activeCapaId=capaKey(active);
+  const deptOptions=(uRole==='spoc'?APP.depts.filter(d=>d.code===uDept):(uRole==='manager'?APP.depts.filter(d=>managerDeptCodes().includes(d.code)):APP.depts));
+  const active=findCapa(APP.activeCapaId,scoped)||open[0]||scoped[0]||null;if(active)APP.activeCapaId=capaKey(active);
   return`
   <div class="grid g4 sg">
     <div class="stat"><div class="sl">Total</div><div class="sv">${scoped.length}</div></div>
@@ -2819,16 +2888,17 @@ function renderCapa(){
     </div>
     <div style="display:flex;flex-direction:column;gap:12px;">
       <div class="card">
-        <div class="ch"><span class="dot" style="background:var(--amber)"></span>Open CAPAs</div>
+        <div class="ch"><span class="dot" style="background:var(--amber)"></span>CAPA List</div>
         <div class="capa-tools">
           <input id="capa-search" placeholder="Search CAPA no, dept, issue..." oninput="filterCapaList()">
-          <select id="capa-filter" onchange="filterCapaList()"><option value="">All status</option><option value="open">Open</option><option value="in-progress">In Progress</option><option value="delayed">Delayed</option><option value="pending-closure">Pending Review</option></select>
+          <select id="capa-dept-filter" onchange="APP.capaDeptFilter=this.value;filterCapaList()"><option value="">All Dept</option>${deptOptions.map(d=>`<option value="${d.code}" ${APP.capaDeptFilter===d.code?'selected':''}>${d.code}</option>`).join('')}</select>
+          <select id="capa-filter" onchange="APP.capaStatusFilter=this.value;filterCapaList()"><option value="" ${!APP.capaStatusFilter?'selected':''}>All status</option><option value="open" ${APP.capaStatusFilter==='open'?'selected':''}>Open</option><option value="in-progress" ${APP.capaStatusFilter==='in-progress'?'selected':''}>In Progress</option><option value="delayed" ${APP.capaStatusFilter==='delayed'?'selected':''}>Delayed</option><option value="pending-closure" ${APP.capaStatusFilter==='pending-closure'?'selected':''}>Pending Review</option><option value="closed" ${APP.capaStatusFilter==='closed'?'selected':''}>Closed</option></select>
         </div>
         <div class="capa-list" id="capa-list">
-        ${open.map(f=>`<div class="fcard ${f.sev} capa-item ${capaKey(f)===APP.activeCapaId?'active':''}" data-key="${capaKey(f)}" data-status="${f.status||''}" data-search="${sanitize([f.ref,f.deptName,f.desc,f.clause].join(' ')).toLowerCase()}" style="cursor:pointer;" onclick="selectCapa('${capaKey(f)}')">
+        ${scoped.map(f=>`<div class="fcard ${f.sev} capa-item ${capaKey(f)===APP.activeCapaId?'active':''}" data-key="${capaKey(f)}" data-status="${f.status||''}" data-dept="${f.dept||''}" data-search="${sanitize([f.ref,f.deptName,f.desc,f.clause].join(' ')).toLowerCase()}" style="cursor:pointer;" onclick="selectCapa('${capaKey(f)}')">
           <div class="fb"><span class="capa-ref">${f.ref}</span>${badge(STAT_BADGE[f.status]||'b-gray',STAT_LABEL[f.status]||f.status)}</div>
           <div class="txs td">${f.deptName} · ${(f.desc||'').substring(0,45)}</div>
-        </div>`).join('')||'<div class="txs td">No open CAPAs 🎉</div>'}
+        </div>`).join('')||'<div class="txs td">No CAPAs found</div>'}
         </div>
         <button class="btn btn-ghost btn-sm wf mt2" onclick="exportCapaExcel()">📊 Export CAPA</button>
       </div>
@@ -2842,10 +2912,13 @@ function renderCapa(){
 function filterCapaList(){
   var q=(el('capa-search')?.value||'').toLowerCase().trim();
   var st=el('capa-filter')?.value||'';
+  var dept=el('capa-dept-filter')?.value||'';
+  APP.capaStatusFilter=st;APP.capaDeptFilter=dept;
   document.querySelectorAll('.capa-item').forEach(function(item){
     var matchQ=!q||(item.dataset.search||'').indexOf(q)>-1;
     var matchSt=!st||item.dataset.status===st;
-    item.style.display=(matchQ&&matchSt)?'':'none';
+    var matchDept=!dept||item.dataset.dept===dept;
+    item.style.display=(matchQ&&matchSt&&matchDept)?'':'none';
   });
 }
 function renderCapaDetail(f){
@@ -3023,7 +3096,7 @@ function emailTpl(type){return (APP.emailTemplates||[]).find(t=>t.type===type&&t
 function renderEmailMaster(canEdit){
   const q=(APP.emailSearch||'').toLowerCase();
   const rows=(APP.emailMaster||[]).filter(r=>!q||[r.spocName,r.email,r.department,r.deptCode,r.reportingName,r.reportingEmail,r.hodEmail,r.managementEmail].join(' ').toLowerCase().includes(q));
-  return `<div class="grid g21 sg"><div class="card"><div class="fb mb2"><div class="ch" style="margin:0"><span class="dot" style="background:var(--brand)"></span>Email Master (${rows.length})</div><div class="flex g2u">${canEdit?`<button class="btn btn-ghost btn-sm" onclick="downloadEmailSample()">Sample</button><button class="btn btn-primary btn-sm" onclick="el('em-import')?.click()">Import</button>`:''}<input type="file" id="em-import" accept=".csv,.xlsx" style="display:none" onchange="importEmailMaster(event)"></div></div><div class="mb2"><input placeholder="Search SPOC, department or email..." value="${sanitize(APP.emailSearch||'')}" oninput="APP.emailSearch=this.value;renderMdBody()"></div><div class="tw"><table><thead><tr><th>SPOC</th><th>Email</th><th>Department</th><th>Manager</th><th>HOD/BUH</th><th>Management</th><th>Status</th>${canEdit?'<th>Actions</th>':''}</tr></thead><tbody>${rows.map(r=>`<tr><td class="pr">${sanitize(r.spocName)}</td><td>${sanitize(r.email)}</td><td>${sanitize(r.department||r.deptCode)}</td><td>${sanitize(r.reportingName)}<div class="txx td">${sanitize(r.reportingEmail)}</div></td><td>${sanitize(r.hodEmail||'-')}</td><td>${sanitize(r.managementEmail||'-')}</td><td>${badge(r.status==='active'?'b-green':'b-gray',r.status==='active'?'Active':'Inactive')}</td>${canEdit?`<td class="flex g1u"><button class="btn btn-ghost btn-sm" onclick="editEmailMaster('${r.id}')">Edit</button><button class="btn btn-danger btn-sm" onclick="deleteEmailMaster('${r.id}')">Delete</button></td>`:''}</tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:12px;">No email records</td></tr>'}</tbody></table></div></div><div class="card"><div class="ch"><span class="dot" style="background:var(--teal)"></span>${canEdit?'Add / Edit':'Scheduler'}</div>${canEdit?emailMasterForm():''}<div class="mt3" style="border-top:1px solid var(--border);padding-top:12px;"><div class="ch"><span class="dot" style="background:var(--amber)"></span>Automation Runs</div><div class="flex g2u fw"><button class="btn btn-ghost btn-sm" onclick="runEmailScheduler('upcoming')">Upcoming 5 Days</button><button class="btn btn-ghost btn-sm" onclick="runEmailScheduler('delayed')">Delayed NCs</button><button class="btn btn-brand btn-sm" onclick="runEmailScheduler('escalation')">Weekly Escalation</button></div><div class="txs td mt2">Summary emails are grouped by department and observations are excluded.</div></div></div></div>`;
+  return `<div class="grid g21 sg"><div class="card"><div class="fb mb2"><div class="ch" style="margin:0"><span class="dot" style="background:var(--brand)"></span>Email Master (${rows.length})</div><div class="flex g2u">${canEdit?`<button class="btn btn-ghost btn-sm" onclick="downloadEmailSample()">Download Template</button><button class="btn btn-primary btn-sm" onclick="el('em-import')?.click()">Import</button>`:''}<input type="file" id="em-import" accept=".csv,.xlsx" style="display:none" onchange="importEmailMaster(event)"></div></div><div class="mb2"><input placeholder="Search SPOC, department or email..." value="${sanitize(APP.emailSearch||'')}" oninput="APP.emailSearch=this.value;renderMdBody()"></div><div class="tw"><table><thead><tr><th>SPOC</th><th>Email</th><th>Department</th><th>Manager</th><th>HOD/BUH</th><th>Management</th><th>Status</th>${canEdit?'<th>Actions</th>':''}</tr></thead><tbody>${rows.map(r=>`<tr><td class="pr">${sanitize(r.spocName)}</td><td>${sanitize(r.email)}</td><td>${sanitize(r.department||r.deptCode)}</td><td>${sanitize(r.reportingName)}<div class="txx td">${sanitize(r.reportingEmail)}</div></td><td>${sanitize(r.hodEmail||'-')}</td><td>${sanitize(r.managementEmail||'-')}</td><td>${badge(r.status==='active'?'b-green':'b-gray',r.status==='active'?'Active':'Inactive')}</td>${canEdit?`<td class="flex g1u"><button class="btn btn-ghost btn-sm" onclick="editEmailMaster('${r.id}')">Edit</button><button class="btn btn-danger btn-sm" onclick="deleteEmailMaster('${r.id}')">Delete</button></td>`:''}</tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:12px;">No email records</td></tr>'}</tbody></table></div></div><div class="card"><div class="ch"><span class="dot" style="background:var(--teal)"></span>${canEdit?'Add / Edit':'Scheduler'}</div>${canEdit?emailMasterForm():''}<div class="mt3" style="border-top:1px solid var(--border);padding-top:12px;"><div class="ch"><span class="dot" style="background:var(--amber)"></span>Automation Runs</div><div class="flex g2u fw"><button class="btn btn-ghost btn-sm" onclick="runEmailScheduler('upcoming')">Upcoming 5 Days</button><button class="btn btn-ghost btn-sm" onclick="runEmailScheduler('delayed')">Delayed NCs</button><button class="btn btn-brand btn-sm" onclick="runEmailScheduler('escalation')">Weekly Escalation</button></div><div class="txs td mt2">Summary emails are grouped by department and observations are excluded.</div></div></div></div>`;
 }
 function emailMasterForm(r){
   r=r||APP.editEmailRecord||{};
@@ -3264,13 +3337,10 @@ function managerFindings(){const codes=managerDeptCodes();return filteredFinding
 function renderManagerPanel(){
   const u=APP.currentUser;
   if(!['manager','admin'].includes(u?.role))return '<div class="info-box">🔒 Manager Console is available only for Manager and Admin roles.</div>';
-  const codes=managerDeptCodes(u),F=managerFindings(),open=F.filter(f=>f.status!=='closed'),pending=F.filter(f=>f.status==='pending-closure'),overdue=open.filter(f=>delayDays(f)>0);
-  const byDept=codes.map(code=>{const d=APP.depts.find(x=>x.code===code)||{code,name:code};const df=open.filter(f=>f.dept===code);return{code,name:d.name,total:df.length,overdue:df.filter(f=>delayDays(f)>0).length,pending:df.filter(f=>f.status==='pending-closure').length,critical:df.filter(f=>f.sev==='critical').length};});
-  return `<div class="grid g4 sg"><div class="stat"><div class="sl">Managed Depts</div><div class="sv">${codes.length}</div></div><div class="stat"><div class="sl">Open NCs</div><div class="sv">${open.length}</div></div><div class="stat"><div class="sl">Overdue</div><div class="sv" style="color:var(--red)">${overdue.length}</div></div><div class="stat"><div class="sl">Pending Review</div><div class="sv" style="color:var(--purple)">${pending.length}</div></div></div>
-  <div class="grid g2 sg">
-    <div class="card"><div class="ch"><span class="dot" style="background:var(--amber)"></span>Department Control</div><div class="tw"><table><thead><tr><th>Dept</th><th>Open</th><th>Overdue</th><th>Pending</th><th>Critical</th><th>Action</th></tr></thead><tbody>${byDept.map(r=>`<tr><td class="pr">${r.name}</td><td>${r.total}</td><td style="color:var(--red);font-weight:800">${r.overdue}</td><td>${r.pending}</td><td>${r.critical}</td><td><button class="btn btn-ghost btn-sm" onclick="managerSendDeptReminder('${r.code}')">Reminder</button></td></tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:12px;">No managed departments mapped</td></tr>'}</tbody></table></div></div>
-    <div class="card"><div class="ch"><span class="dot" style="background:var(--purple)"></span>Pending Closure Review</div>${pending.length?pending.slice(0,8).map(f=>`<div class="fcard ${f.sev}"><div class="fb"><span class="f7">${f.ref}</span>${badge(SEV_BADGE[f.sev]||'b-gray',SEV_LABEL[f.sev]||f.sev)}</div><div class="txs td mt1">${f.deptName} · ${sanitize((f.desc||'').substring(0,80))}</div><div class="flex g2u mt2"><button class="btn btn-primary btn-sm" onclick="openReviewModal('${capaKey(f)}')">Review</button><button class="btn btn-ghost btn-sm" onclick="openCapa('${capaKey(f)}')">Open CAPA</button></div></div>`).join(''):'<div class="txs td">No pending manager reviews.</div>'}</div>
-  </div>
+  const codes=managerDeptCodes(u),F=managerFindings(),open=F.filter(f=>f.status!=='closed'),overdue=open.filter(f=>delayDays(f)>0);
+  const byDept=codes.map(code=>{const d=APP.depts.find(x=>x.code===code)||{code,name:code};const df=open.filter(f=>f.dept===code);return{code,name:d.name,total:df.length,overdue:df.filter(f=>delayDays(f)>0).length,critical:df.filter(f=>f.sev==='critical').length};});
+  return `<div class="grid g3 sg"><div class="stat"><div class="sl">Managed Depts</div><div class="sv">${codes.length}</div></div><div class="stat"><div class="sl">Open NCs</div><div class="sv">${open.length}</div></div><div class="stat"><div class="sl">Overdue</div><div class="sv" style="color:var(--red)">${overdue.length}</div></div></div>
+  <div class="card sg"><div class="ch"><span class="dot" style="background:var(--amber)"></span>Department Control</div><div class="tw"><table><thead><tr><th>Dept</th><th>Open</th><th>Overdue</th><th>Critical</th><th>Action</th></tr></thead><tbody>${byDept.map(r=>`<tr><td class="pr">${r.name}</td><td>${r.total}</td><td style="color:var(--red);font-weight:800">${r.overdue}</td><td>${r.critical}</td><td><button class="btn btn-ghost btn-sm" onclick="managerSendDeptReminder('${r.code}')">Reminder</button></td></tr>`).join('')||'<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:12px;">No managed departments mapped</td></tr>'}</tbody></table></div></div>
   <div class="card"><div class="fb mb2"><div class="ch" style="margin:0"><span class="dot" style="background:var(--red)"></span>Overdue / Open NCs</div><button class="btn btn-brand btn-sm" onclick="managerSendSummary()">Send Summary</button></div><div class="tw"><table><thead><tr><th>Ref</th><th>Dept</th><th>Issue</th><th>Severity</th><th>Due</th><th>Delay</th><th>Status</th><th>Action</th></tr></thead><tbody>${open.map(f=>`<tr><td class="pr">${f.ref}</td><td>${f.deptName}</td><td style="max-width:260px;">${sanitize((f.desc||'').substring(0,95))}</td><td>${badge(SEV_BADGE[f.sev]||'b-gray',SEV_LABEL[f.sev]||f.sev)}</td><td>${f.due||'-'}</td><td style="font-weight:800;color:${delayDays(f)>0?'var(--red)':'var(--text2)'}">${delayDays(f)}d</td><td>${badge(STAT_BADGE[f.status]||'b-gray',STAT_LABEL[f.status]||f.status)}</td><td><button class="btn btn-ghost btn-sm" onclick="openCapa('${capaKey(f)}')">Open</button></td></tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:12px;">No open NCs for managed departments</td></tr>'}</tbody></table></div></div>`;
 }
 function managerSendDeptReminder(code){
@@ -3525,53 +3595,63 @@ function downloadImportTemplate(){
 // ═══════════════════════════════════════════════════
 function buildOCPContent(){
   el('ocp-body').innerHTML=`
-    <h3>1. System Overview</h3>
-    ONEPWS AuditPro v4.5 is an integrated Quality Audit Management System aligned with AS9100 Rev D, ISO 9001, ISO 14001, and ISO 45001. All data is stored in browser localStorage for single-node deployment, or can be connected to a backend REST API for enterprise use.
-    <h3>2. Login & Role-Based Access</h3>
-    Four roles: <strong>Master Admin</strong> (full access), <strong>Auditor</strong> (conduct audits, log findings, verify closures), <strong>Dept SPOC</strong> (respond to findings, submit closures), <strong>Management Viewer</strong> (read-only dashboard & reports). Login state persists across browser refreshes via localStorage key <code>ap_cu</code>.
-    <h3>3. My Pending Tasks</h3>
-    Personalized task view auto-generated per role. Shows overdue CAPAs, pending closure reviews, upcoming audits, and management approvals with priority (P1/P2/P3) and due date.
-    <h3>4. Dashboard</h3>
-    Real-time compliance KPIs, department scorecard, Top 5 / Bottom 5 benchmarking, AS9100D clause heatmap, and critical alerts. All metrics update instantly when findings or CAPA statuses change.
-    <h3>5. Audit Planning</h3>
-    Schedule audits via calendar view or quick-schedule form. Use <em>Create Full Audit</em> to select audit standards (AS9100D, ISO 9001, ISO 14001, ISO 45001) — single or combined. Checklists are auto-generated per selected standard(s).
-    <h3>6. Audit Execution</h3>
-    Free navigation — jump to any section/question without restriction. Four answer states: Yes / No / N/A / Skip. Auto-save every 30 seconds. "No" answers auto-prompt finding modal. Evidence photos uploaded as base64 inline. Auditor notes persist with session. Submit only allowed when all questions are answered.
-    <h3>7. Findings Register</h3>
-    Advanced multi-column filter and sort (Dept, Severity, Status, Clause, free text). Repeat findings tagged automatically. Export to Excel.
-    <h3>8. CAPA Tracker</h3>
-    Full lifecycle: Logged → In Progress → Pending Review → Closed. SPOC submits closure with before/after evidence photos. Auditor accepts or rejects with comments. Full activity log with timestamps. Auto-escalation rules documented for overdue CAPAs.
-    <h3>9. Reports</h3>
-    Department-wise PDF and Excel generation with ONEPWS branding and red header. Before/After evidence display in report. Multi-standard selection visible in report header.
-    <h3>10. Master Tracker</h3>
-    Central view of Findings, CAPA, and Learnings with full-text search. Export to Excel/PDF.
-    <h3>11. Bulk Import</h3>
-    Upload Excel (.xlsx) or CSV for Findings, Learnings, or Checkpoints. Auto-maps departments, validates rows, reports errors line by line. Download templates for each type.
-    <h3>12. Master Data Library</h3>
-    Manage 18 departments, audit checkpoints, auditors. All CRUD operations restricted to Master Admin. Checkpoints pre-loaded with AS9100D clause-mapped questions for all 18 ONEPWS departments.
-    <h3>13. Admin Panel</h3>
-    User management (create/edit/deactivate/delete), Role Permissions Matrix, System Settings toggles, Backup/Export, and this OCP.
-    <h3>14. Data Storage Architecture</h3>
-    All data stored in browser localStorage (keys: ap_users, ap_depts, ap_auds, ap_cps, ap_finds, ap_notifs, ap_secs, ap_learns, ap_stds, ap_cu, ap_sess). For production: replace LS.get/set calls with fetch() to your backend REST API. Recommended: Node.js/Express + PostgreSQL.
-    <h3>15. Backup & Recovery</h3>
-    Admin Panel → System → Export Backup downloads full JSON. Restore: Admin → import (planned feature) or paste JSON via console. Audit session auto-recovers on next login via recovery banner.
-    <h3>16. Data Security</h3>
-    Role-based access enforced at navigation level. Admin functions require admin role. For production: implement JWT authentication, HTTPS, and server-side role validation. Passwords in demo are plain-text — hash with bcrypt in production.
-    <h3>17. Validated: System Test Checklist</h3>
-    ✅ Login persistence across refresh &nbsp;|&nbsp; ✅ Role-based nav &nbsp;|&nbsp; ✅ All buttons functional &nbsp;|&nbsp; ✅ Audit session auto-save &nbsp;|&nbsp; ✅ Free checklist navigation &nbsp;|&nbsp; ✅ Finding modal with evidence upload &nbsp;|&nbsp; ✅ CAPA closure workflow &nbsp;|&nbsp; ✅ PDF generation (jsPDF) &nbsp;|&nbsp; ✅ Excel export (SheetJS) &nbsp;|&nbsp; ✅ Bulk import with validation &nbsp;|&nbsp; ✅ Notification system &nbsp;|&nbsp; ✅ 18 dept checkpoints &nbsp;|&nbsp; ✅ Multi-standard selector &nbsp;|&nbsp; ✅ Top 5 / Bottom 5 on dashboard &nbsp;|&nbsp; ✅ Master Tracker with search/export &nbsp;|&nbsp; ✅ Admin CRUD for all entities &nbsp;|&nbsp; ✅ OCP documentation
-  `;
+    <div class="ocp-viewer">
+      <div class="ocp-toolbar">
+        <div class="flex g2u">
+          <button class="btn btn-ghost btn-sm" onclick="ocpPrevPage()">Previous</button>
+          <button class="btn btn-ghost btn-sm" onclick="ocpNextPage()">Next</button>
+          <span class="txs td" id="ocp-page-info">Loading...</span>
+        </div>
+        <div class="flex g2u">
+          <button class="btn btn-ghost btn-sm" onclick="ocpZoom(-0.15)">-</button>
+          <button class="btn btn-ghost btn-sm" onclick="ocpZoom(0.15)">+</button>
+          <button class="btn btn-brand btn-sm" onclick="ocpFitWidth()">Fit Width</button>
+        </div>
+      </div>
+      <div class="ocp-canvas-wrap" id="ocp-canvas-wrap"><canvas id="ocp-canvas"></canvas></div>
+    </div>`;
+  renderOcpPdf();
 }
-function downloadOCPPDF(){
-  if(!window.jspdf){showToast('PDF loading...');return;}const{jsPDF}=window.jspdf;const doc=new jsPDF();const pw=doc.internal.pageSize.getWidth();
-  doc.setFillColor(192,57,43);doc.rect(0,0,pw,28,'F');doc.setTextColor(255,255,255);doc.setFontSize(13);doc.setFont('helvetica','bold');
-  doc.text('ONEPWS Pvt. Ltd. — Operating Control Procedure',pw/2,14,{align:'center'});doc.setFontSize(9);doc.setFont('helvetica','normal');
-  doc.text('AuditPro v4.0 | Integrated QMS Portal | Confidential',pw/2,22,{align:'center'});
-  doc.setTextColor(30,30,50);
-  const sections=[['1. System Overview','ONEPWS AuditPro v4.0 — AS9100D / ISO 9001 / ISO 14001 / ISO 45001 aligned QMS.'],['2. Login & RBAC','4 roles: Admin, Auditor, SPOC, Viewer. Session persists via localStorage.'],['3. Dashboard','Real-time KPIs, Top 5/Bottom 5, clause heatmap, critical alerts.'],['4. Audit Planning','Calendar view + multi-standard selector. Standards: AS9100D, ISO 9001/14001/45001.'],['5. Audit Execution','Free navigation, auto-save 30s, finding modal, evidence upload, offline-capable.'],['6. CAPA Workflow','SPOC submits closure → Auditor accepts/rejects → Full audit trail.'],['7. Reports','Dept-wise branded PDF/Excel. Before/After evidence. Standards shown in header.'],['8. Bulk Import','Upload Excel for Findings/Learnings/Checkpoints. Download templates available.'],['9. Data Storage','localStorage keys: ap_users, ap_finds, ap_cps, ap_learns etc. Replace with API for production.'],['10. Backup','Admin → Export Backup → Full JSON download. Schedule daily exports to server.']];
-  doc.autoTable({startY:34,head:[['Section','Description']],body:sections,styles:{fontSize:8,cellPadding:3},headStyles:{fillColor:[192,57,43],textColor:255},columnStyles:{0:{fontStyle:'bold',cellWidth:50}},margin:{left:14,right:14}});
-  doc.setFontSize(7);doc.setTextColor(150,150,150);doc.text(`ONEPWS Pvt. Ltd. | OCP v4.0 | Generated: ${new Date().toLocaleString()} | Confidential`,pw/2,287,{align:'center'});
-  doc.save(`ONEPWS_OCP_v4.pdf`);showToast('📄 OCP PDF downloaded!');
+var OCP_VIEW={pdf:null,page:1,scale:1.1,rendering:false,pending:false};
+function renderOcpPdf(){
+  if(!window.pdfjsLib){el('ocp-body').innerHTML='<div class="info-box">PDF viewer is still loading. Refresh once if it does not appear.</div>';return;}
+  pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  if(OCP_VIEW.pdf){renderOcpPage();return;}
+  pdfjsLib.getDocument(OCP_PDF_SRC).promise.then(function(pdf){
+    OCP_VIEW.pdf=pdf;OCP_VIEW.page=1;ocpFitWidth();
+  }).catch(function(err){
+    el('ocp-body').innerHTML='<div class="info-box" style="color:var(--red);">Unable to load OCP PDF: '+sanitize(err.message||err)+'</div>';
+  });
 }
+function renderOcpPage(){
+  if(!OCP_VIEW.pdf||OCP_VIEW.rendering)return;
+  OCP_VIEW.rendering=true;
+  OCP_VIEW.pdf.getPage(OCP_VIEW.page).then(function(page){
+    const canvas=el('ocp-canvas'),ctx=canvas.getContext('2d');
+    const viewport=page.getViewport({scale:OCP_VIEW.scale});
+    canvas.width=viewport.width;canvas.height=viewport.height;
+    return page.render({canvasContext:ctx,viewport}).promise;
+  }).then(function(){
+    OCP_VIEW.rendering=false;
+    const info=el('ocp-page-info');if(info)info.textContent='Page '+OCP_VIEW.page+' of '+OCP_VIEW.pdf.numPages+' · '+Math.round(OCP_VIEW.scale*100)+'%';
+    if(OCP_VIEW.pending){OCP_VIEW.pending=false;renderOcpPage();}
+  }).catch(function(err){
+    OCP_VIEW.rendering=false;showToast('OCP page render failed: '+(err.message||err),5000);
+  });
+}
+function queueOcpRender(){if(OCP_VIEW.rendering)OCP_VIEW.pending=true;else renderOcpPage();}
+function ocpPrevPage(){if(!OCP_VIEW.pdf||OCP_VIEW.page<=1)return;OCP_VIEW.page--;queueOcpRender();}
+function ocpNextPage(){if(!OCP_VIEW.pdf||OCP_VIEW.page>=OCP_VIEW.pdf.numPages)return;OCP_VIEW.page++;queueOcpRender();}
+function ocpZoom(delta){OCP_VIEW.scale=Math.max(0.5,Math.min(2.4,OCP_VIEW.scale+delta));queueOcpRender();}
+function ocpFitWidth(){
+  if(!OCP_VIEW.pdf){return;}
+  OCP_VIEW.pdf.getPage(OCP_VIEW.page).then(function(page){
+    const wrap=el('ocp-canvas-wrap');const base=page.getViewport({scale:1});
+    OCP_VIEW.scale=Math.max(0.5,Math.min(2.4,((wrap?.clientWidth||900)-36)/base.width));
+    queueOcpRender();
+  });
+}
+function downloadOCPPDF(){navigate('ocp');}
 // OCP content is built via post-render: if(page==='ocp')buildOCPContent();
   // Restore date filter values
   setTimeout(function(){var df=el('dr-from');var dt=el('dr-to');if(df&&APP.dateFrom)df.value=APP.dateFrom;if(dt&&APP.dateTo)dt.value=APP.dateTo;},50);
@@ -4497,7 +4577,7 @@ function topAct(){
     managerpanel:()=>managerSendSummary(),
     mastertracker:()=>downloadTrackerExcel(),
     importdata:()=>el('im-file')?.click(),
-    ocp:()=>downloadOCPPDF(),
+    ocp:()=>navigate('ocp'),
   };
   acts[APP.currentPage]?.();
 }
