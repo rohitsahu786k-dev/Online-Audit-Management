@@ -1024,7 +1024,7 @@ const NAV_CFG=[
   {sec:'Audit',       items:[{id:'planning',l:'Planning',ico:'calendar-days'},{id:'execution',l:'Execution',ico:'circle-check'},{id:'reports',l:'Reports',ico:'file-text'}]},
   {sec:'Compliance',  items:[{id:'findings',l:'Findings',ico:'triangle-alert',badge:'findings'},{id:'capa',l:'CAPA Tracker',ico:'wrench',badge:'capa'},{id:'learnings',l:'Learnings',ico:'lightbulb'},{id:'mastertracker',l:'Master Tracker',ico:'files'}]},
   {sec:'Master Data', items:[{id:'masterdata',l:'Master Library',ico:'database'},{id:'importdata',l:'Bulk Import',ico:'upload'}]},
-  {sec:'Admin',       items:[{id:'adminpanel',l:'Admin Panel',ico:'shield-lock',adminOnly:true}]},
+  {sec:'Admin',       items:[{id:'adminpanel',l:'Admin Panel',ico:'shield',adminOnly:true}]},
   {sec:'Help',        items:[{id:'ocp',l:'OCP Manual',ico:'book-open'}]},
 ];
 
@@ -1162,7 +1162,7 @@ function icon(name,cls){
 const EMOJI_ICON_MAP={
   '📋':'clipboard-list','📊':'bar-chart-3','📄':'file-text','📈':'trending-up','📅':'calendar-days',
   '✅':'circle-check','⚠️':'triangle-alert','⚠':'triangle-alert','🔧':'wrench','💡':'lightbulb',
-  '📑':'files','🗄️':'database','🗄':'database','📥':'upload','🔐':'shield-lock','📘':'book-open',
+  '📑':'files','🗄️':'database','🗄':'database','📥':'upload','🔐':'shield','📘':'book-open',
   '🔔':'bell','🖨️':'printer','🖨':'printer','👁':'eye','🙈':'eye-off','✕':'x','🆕':'plus-circle',
   '💾':'save','📸':'image','🔍':'search','❌':'circle-x','🤖':'bot','🗑':'trash-2','➕':'plus',
   '⭕':'circle','🔵':'circle-dot','▶':'play','🔒':'lock','🔑':'key-round','⏰':'clock','⚡':'zap',
@@ -1424,6 +1424,7 @@ function ensureRoleDefaults(){
 function initApp(){
   const u=APP.currentUser;
   if(!u)return;
+  initApiSync();
   ensureRoleDefaults();
   repairFindingsStore();
   el('uname').textContent=u.name;
@@ -2114,6 +2115,10 @@ function renderPlanning(){
 }
 let calViewDate=new Date();
 function calNav(dir){calViewDate.setMonth(calViewDate.getMonth()+dir);initCalendar();}
+function dateOnly(d){return new Date(d.getFullYear(),d.getMonth(),d.getDate());}
+function plannedAuditsForDate(isoDate){
+  return (LS.get('ap_planned_audits',[])||[]).filter(a=>a.date===isoDate);
+}
 function initCalendar(){
   const grid=el('cal-grid');if(!grid)return;
   const now=new Date();const yr=calViewDate.getFullYear();const mo=calViewDate.getMonth();
@@ -2125,17 +2130,47 @@ function initCalendar(){
   for(let i=0;i<firstDay;i++){const sp=document.createElement('div');grid.appendChild(sp);}
   for(let d=1;d<=daysInMonth;d++){
     const cell=document.createElement('div');const isToday=isCurrentMonth&&d===today;
-    cell.style.cssText='padding:5px;text-align:center;border-radius:6px;cursor:pointer;min-height:44px;border:1px solid '+(isToday?'var(--brand)':'var(--border)')+';background:'+(isToday?'var(--brand-l)':'var(--bg2)')+';transition:all .15s;';
-    cell.innerHTML='<div style="font-size:11px;font-weight:'+(isToday?800:400)+';color:'+(isToday?'var(--brand)':'var(--text2)')+';">'+d+'</div>';
-    cell.onclick=(function(day){return function(){showToast(calViewDate.toLocaleString('en-US',{month:'long'})+' '+day+', '+yr);};})(d);
+    const iso=new Date(yr,mo,d).toISOString().slice(0,10);
+    const audits=plannedAuditsForDate(iso);
+    cell.style.cssText='padding:5px;text-align:center;border-radius:6px;cursor:pointer;min-height:52px;border:1px solid '+(audits.length?'var(--accent)':isToday?'var(--brand)':'var(--border)')+';background:'+(audits.length?'var(--accent-l)':isToday?'var(--brand-l)':'var(--bg2)')+';transition:all .15s;';
+    cell.innerHTML='<div style="font-size:11px;font-weight:'+(isToday||audits.length?800:500)+';color:'+(audits.length?'var(--accent)':isToday?'var(--brand)':'var(--text2)')+';">'+d+'</div>'+(audits.length?'<div class="txx f7" style="color:var(--accent);margin-top:3px;">'+audits.length+' audit'+(audits.length>1?'s':'')+'</div>':'');
+    cell.onclick=(function(day,date,auditsForDay){return function(){selectPlanningDate(date,auditsForDay);};})(d,iso,audits);
     grid.appendChild(cell);
   }
+  renderPlanningList();
 }
 function initDateDefaults(){const today=new Date().toISOString().split('T')[0];const d=el('na-date');if(d&&!d.value)d.value=today;const d2=el('pl-date');if(d2&&!d2.value)d2.value=today;}
+function selectPlanningDate(date,audits){
+  const d=el('na-date');if(d)d.value=date;
+  if(audits&&audits.length){
+    showToast(audits.length+' planned audit(s) on '+date,3500);
+  }else{
+    showToast('Selected '+date);
+  }
+}
+function buildPlannedAuditFromForm(status){
+  const dept=el('na-dept')?.value;const aud=el('na-aud')?.value;const date=el('na-date')?.value;const type=el('na-type')?.value;
+  const stds=(APP.standards||[]).slice();
+  if(!dept){showToast('Select a department');return null;}
+  if(!stds.length){showToast('Select at least one standard');return null;}
+  if(!aud){showToast('Select an auditor');return null;}
+  if(!date){showToast('Select audit date');return null;}
+  const deptName=APP.depts.find(d=>d.code===dept)?.name||dept;
+  const secs=buildChecklist(dept,stds);
+  return {
+    id:'aud_'+Date.now(),dept,deptName,auditor:aud,date,type,standards:stds,
+    sections:secs,ref:dept+'-AUD-'+new Date().getFullYear()+'-'+String(Date.now()).slice(-4),
+    createdAt:new Date().toISOString(),status:status||'planned'
+  };
+}
 function scheduleAudit(){
-  const dept=el('pl-dept').value;const aud=el('pl-aud').value;const date=el('pl-date').value;
-  addNotif('audit','Audit Scheduled',`${dept} audit on ${date} — ${aud}`,'planning',['admin','auditor','spoc']);
-  showToast(`✅ Scheduled for ${dept} on ${date} — ${aud}`);buildNav();
+  const audit=buildPlannedAuditFromForm('planned');if(!audit)return;
+  const planned=LS.get('ap_planned_audits',[])||[];
+  planned.push(audit);
+  LS.set('ap_planned_audits',planned);
+  addNotif('audit','Audit Scheduled',audit.deptName+' on '+audit.date+' - '+audit.auditor,'planning',['admin','auditor','spoc']);
+  initCalendar();buildNav();
+  showToast('Scheduled '+audit.deptName+' audit on '+audit.date);
 }
 
 // ═══════════════════════════════════════════════════
@@ -2331,7 +2366,7 @@ function removePlannedAudit(idx){
   confirmAct('Remove this planned audit?',function(){
     const planned=LS.get('ap_planned_audits',[])||[];
     planned.splice(idx,1);LS.set('ap_planned_audits',planned);
-    renderPage('execution');showToast('Audit removed');
+    renderPage(APP.currentPage==='planning'?'planning':'execution');showToast('Audit removed');
   });
 }
 function saveAuditDraft(){saveAS();const ts=new Date().toLocaleTimeString();const e=el('save-ts');if(e)e.textContent='Saved '+ts;showToast('✅ Draft saved');}
@@ -3898,12 +3933,17 @@ function renderPlanning(){
   const active=getActiveAudit();
   const depts=APP.depts;
   const auds=APP.auditors.filter(a=>a.status==='active');
+  const planned=LS.get('ap_planned_audits',[])||[];
+  const completed=LS.get('ap_completed_audits',[])||[];
+  const today=dateOnly(new Date());
+  const overdue=planned.filter(a=>a.date&&dateOnly(new Date(a.date))<today).length;
+  const next30=planned.filter(a=>{const d=new Date(a.date);return !isNaN(d)&&d>=today&&d<=new Date(today.getTime()+30*86400000);}).length;
   return`
   <div class="grid g4 sg">
     <div class="stat"><div class="sl">Annual Target</div><div class="sv">48</div><div class="sd">4 cycles × 18 depts</div></div>
-    <div class="stat"><div class="sl">Completed</div><div class="sv" style="color:var(--green)">9</div><div class="sd du">Cycle 2</div></div>
-    <div class="stat"><div class="sl">Scheduled</div><div class="sv" style="color:var(--accent)">5</div><div class="sd">Next 30 days</div></div>
-    <div class="stat"><div class="sl">Overdue</div><div class="sv" style="color:var(--red)">2</div><div class="sd dd">Action needed</div></div>
+    <div class="stat"><div class="sl">Completed</div><div class="sv" style="color:var(--green)">${completed.length}</div><div class="sd du">Submitted audits</div></div>
+    <div class="stat"><div class="sl">Scheduled</div><div class="sv" style="color:var(--accent)">${planned.length}</div><div class="sd">${next30} next 30 days</div></div>
+    <div class="stat"><div class="sl">Overdue</div><div class="sv" style="color:var(--red)">${overdue}</div><div class="sd dd">Action needed</div></div>
   </div>
   ${active?`<div class="card sg" style="border:2px solid var(--brand);">
     <div class="ch fb"><div class="flex g2u"><span class="dot" style="background:var(--brand)"></span>Active Audit — Ready to Execute</div>${badge('b-green','Active')}</div>
@@ -3956,10 +3996,17 @@ function renderPlanning(){
           <div class="ch"><span class="dot" style="background:var(--green)"></span>Checklist Preview</div>
           <div id="chk-preview-body"></div>
         </div>
-        <button class="btn btn-brand wf" onclick="createAndStartAudit()">📋 Create Audit & Generate Checklist →</button>
-        <button class="btn btn-ghost btn-sm wf mt1" onclick="updateChkPreview(true)">👁 Preview Full Checklist</button>
+        <div class="grid g2" style="gap:8px;">
+          <button class="btn btn-brand wf" id="schedule-audit-btn" onclick="scheduleAudit()"><i data-lucide="calendar-plus" class="ico-svg"></i>Schedule Audit</button>
+          <button class="btn btn-primary wf" onclick="createAndStartAudit()"><i data-lucide="play" class="ico-svg"></i>Create & Start</button>
+        </div>
+        <button class="btn btn-ghost btn-sm wf mt1" onclick="updateChkPreview(true)"><i data-lucide="eye" class="ico-svg"></i>Preview Full Checklist</button>
       </div>
     </div>
+  </div>
+  <div class="card">
+    <div class="ch fb"><div class="flex g2u"><span class="dot" style="background:var(--accent)"></span>Planned Audits</div><span class="badge b-blue">${planned.length}</span></div>
+    <div id="planning-list"></div>
   </div>`;
 }
 
@@ -4003,25 +4050,29 @@ function updateChkPreview(showFull=false){
   }
 }
 
+function renderPlanningList(){
+  const box=el('planning-list');if(!box)return;
+  const planned=(LS.get('ap_planned_audits',[])||[]).slice().sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
+  if(!planned.length){box.innerHTML='<div class="info-box">No planned audits yet. Select department, standards and date, then click Schedule Audit.</div>';return;}
+  box.innerHTML='<div class="tw"><table><thead><tr><th>Date</th><th>Department</th><th>Auditor</th><th>Standards</th><th>Questions</th><th>Actions</th></tr></thead><tbody>'+
+    planned.map(function(a,idx){
+      const originalIdx=(LS.get('ap_planned_audits',[])||[]).findIndex(x=>x.id===a.id);
+      const stds=(a.standards||[]).map(s=>STD_META[s]?.short||s).join(', ');
+      const q=(a.sections||[]).reduce((n,s)=>n+(s._checkpoints||[]).length,0);
+      return '<tr><td class="pr">'+sanitize(a.date||'-')+'</td><td>'+sanitize(a.deptName||a.dept)+'</td><td>'+sanitize(a.auditor||'-')+'</td><td>'+sanitize(stds||'-')+'</td><td>'+q+'</td><td class="flex g1u"><button class="btn btn-brand btn-sm" onclick="startPlannedAudit('+originalIdx+')"><i data-lucide="play" class="ico-svg"></i>Start</button><button class="btn btn-danger btn-sm" onclick="removePlannedAudit('+originalIdx+')"><i data-lucide="trash-2" class="ico-svg"></i></button></td></tr>';
+    }).join('')+'</tbody></table></div>';
+  renderIcons(box);
+}
+
 function createAndStartAudit(){
-  const dept=el('na-dept')?.value;const aud=el('na-aud')?.value;
-  const date=el('na-date')?.value;const type=el('na-type')?.value;
-  const stds=APP.standards;
-  if(!dept){showToast('⚠ Select a department');return;}
-  if(!stds.length){showToast('⚠ Select at least one standard');return;}
-  if(!aud){showToast('⚠ Select an auditor');return;}
-  const deptName=APP.depts.find(d=>d.code===dept)?.name||dept;
-  const secs=buildChecklist(dept,stds);
+  const audit=buildPlannedAuditFromForm('in-progress');if(!audit)return;
+  const stds=audit.standards||[];
+  const secs=audit.sections||[];
   const totalQ=secs.reduce((s,sec)=>s+sec._checkpoints.length,0);
-  const audit={
-    id:'aud_'+Date.now(),dept,deptName,auditor:aud,date,type,standards:stds,
-    sections:secs,ref:dept+'-AUD-'+new Date().getFullYear()+'-'+String(Date.now()).slice(-4),
-    createdAt:new Date().toISOString(),status:'in-progress',
-  };
   setActiveAudit(audit);
   AS={answers:{},findings:{},notes:{},genNotes:''};saveAS();
   APP.currentSection=0;
-  addNotif('audit','Audit Planned',deptName+' · '+stds.map(s=>STD_META[s]?.short).join('+')+' · '+totalQ+' questions · '+aud,'execution',['admin','auditor','spoc']);
+  addNotif('audit','Audit Started',audit.deptName+' · '+stds.map(s=>STD_META[s]?.short).join('+')+' · '+totalQ+' questions · '+audit.auditor,'execution',['admin','auditor','spoc']);
   showToast('Audit created. Checklist ready with '+totalQ+' questions.');
   buildNav();navigate('execution');
 }
