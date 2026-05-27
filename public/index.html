@@ -831,7 +831,7 @@ const DEF_LEARNINGS_SAMPLE=[
   {id:'l3',title:'Training Competence Matrix',dept:'',sev:'minor',clause:'§7.2',rc:'Training matrix not cross-referenced with job roles.',pa:'Quarterly competence review with dept heads.',repeat:false,crossDept:true},
 ];
 const DEF_EMAIL_TEMPLATES=[
-  {id:'tpl_audit_submission',type:'audit_submission',name:'Audit Report Submission',active:true,subject:'Audit Report Submitted - {{department_name}}',body:'Dear {{spoc_name}},<br><br>The audit report for {{department_name}} has been submitted.<br><br><table border="1" cellpadding="6" cellspacing="0"><tr><th>Audit</th><th>Findings</th><th>Submitted</th></tr><tr><td>{{audit_name}}</td><td>{{nc_count}}</td><td>{{submitted_at}}</td></tr></table><br>Regards,<br>Audit Team',updatedAt:''},
+  {id:'tpl_audit_submission',type:'audit_submission',name:'Audit Report Submission',active:true,subject:'Audit Report Submitted - {{department_name}}',body:'Dear {{spoc_name}},<br><br>The audit report for {{department_name}} has been submitted.<br><br><table border="1" cellpadding="6" cellspacing="0"><tr><th>Audit</th><th>Findings</th><th>Submitted</th></tr><tr><td>{{audit_name}}</td><td>{{nc_count}}</td><td>{{submitted_at}}</td></tr></table><br>{{nc_table}}<br>Regards,<br>Audit Team',updatedAt:''},
   {id:'tpl_upcoming_reminder',type:'upcoming_reminder',name:'Upcoming Target Closure Reminder',active:true,subject:'Reminder: Pending NC Closure - {{department_name}}',body:'Dear {{spoc_name}},<br><br>The following NCs are due within {{window_days}} day(s).<br><br>{{nc_table}}<br>Please close the pending NCs at the earliest.<br><br>Regards,<br>Audit Team',updatedAt:''},
   {id:'tpl_delayed',type:'delayed',name:'Delayed NC Notification',active:true,subject:'Overdue NCs - {{department_name}}',body:'Dear {{spoc_name}},<br><br>The following NCs have crossed the target closure date.<br><br>{{nc_table}}<br>Please submit closure evidence immediately.<br><br>Regards,<br>Audit Team',updatedAt:''},
   {id:'tpl_escalation',type:'escalation',name:'Escalation Reminder',active:true,subject:'Escalation: Delayed NC Closure - {{department_name}}',body:'Dear {{spoc_name}},<br><br>The following NCs remain delayed and have reached escalation level {{escalation_level}}.<br><br>{{nc_table}}<br>Regards,<br>Audit Team',updatedAt:''}
@@ -842,6 +842,23 @@ const DEF_ESCALATION_MATRIX=[
   {min:15,max:30,label:'15-30 Days',to:['spoc'],cc:['manager','hod']},
   {min:31,max:9999,label:'30+ Days',to:['spoc'],cc:['management']}
 ];
+function normalizeEmailTemplates(list){
+  var rows=Array.isArray(list)?list.slice():[];
+  var changed=false;
+  DEF_EMAIL_TEMPLATES.forEach(function(def){
+    var t=rows.find(function(x){return x&&x.id===def.id;});
+    if(!t){rows.push(Object.assign({},def));changed=true;return;}
+    if(!t.type){t.type=def.type;changed=true;}
+    if(!t.name){t.name=def.name;changed=true;}
+    if(!t.subject){t.subject=def.subject;changed=true;}
+    if(!t.body){t.body=def.body;changed=true;}
+    if(t.type==='audit_submission'&&t.body.indexOf('{{nc_table}}')<0){
+      t.body=t.body+'<br><br>{{nc_table}}';
+      changed=true;
+    }
+  });
+  return {value:rows,changed:changed};
+}
 function buildDefaultEmailMaster(){
   return DEF_DEPTS.map(function(d){
     var spoc=DEF_USERS.find(function(u){return u.role==='spoc'&&u.dept===d.code;})||{};
@@ -873,8 +890,8 @@ const APP={
   get learnings()   {return LS.init('ap_learns',DEF_LEARNINGS);}, set learnings(v)  {LS.set('ap_learns',v);},
   get standards()   {return LS.init('ap_stds',['as9100d']);},      set standards(v)  {LS.set('ap_stds',v);},
   get emailMaster() {return LS.init('ap_email_master',buildDefaultEmailMaster());}, set emailMaster(v){LS.set('ap_email_master',v);},
-  get emailTemplates(){return LS.init('ap_email_templates',DEF_EMAIL_TEMPLATES);}, set emailTemplates(v){LS.set('ap_email_templates',v);},
-  get emailLogs()   {return LS.init('ap_email_logs',[]);},         set emailLogs(v) {LS.set('ap_email_logs',v);},
+  get emailTemplates(){var r=normalizeEmailTemplates(LS.init('ap_email_templates',DEF_EMAIL_TEMPLATES));if(r.changed)LS.set('ap_email_templates',r.value);return r.value;}, set emailTemplates(v){LS.set('ap_email_templates',normalizeEmailTemplates(v).value);},
+  get emailLogs()   {return LS.get('ap_email_logs',[]);},          set emailLogs(v) {LS.set('ap_email_logs',v);},
   get escalationMatrix(){return LS.init('ap_escalation_matrix',DEF_ESCALATION_MATRIX);}, set escalationMatrix(v){LS.set('ap_escalation_matrix',v);},
   get session()     {return LS.get('ap_sess',null);},              set session(v)    {if(v)LS.set('ap_sess',v);else LS.del('ap_sess');},
   currentPage:'dashboard',
@@ -1010,6 +1027,69 @@ const SEV_BADGE={critical:'b-red',major:'b-amber',minor:'b-teal',obs:'b-purple'}
 const SEV_LABEL={critical:'Critical',major:'Major',minor:'Minor',obs:'Observation'};
 const STAT_BADGE={open:'b-red','in-progress':'b-amber',delayed:'b-red',closed:'b-green','pending-closure':'b-purple'};
 const STAT_LABEL={open:'Open','in-progress':'In Progress',delayed:'Delayed',closed:'Closed','pending-closure':'Pending Review'};
+const CLAUSE_DESCRIPTIONS={
+  '4':'Context of the organization',
+  '4.3':'Determining the scope of the quality management system',
+  '4.4':'Quality management system and its processes',
+  '5':'Leadership',
+  '5.1':'Leadership and commitment',
+  '5.2':'Quality policy',
+  '5.3':'Organizational roles, responsibilities and authorities',
+  '6':'Planning',
+  '6.1':'Actions to address risks and opportunities',
+  '6.2':'Quality objectives and planning to achieve them',
+  '7':'Support',
+  '7.1':'Resources',
+  '7.1.3':'Infrastructure',
+  '7.1.4':'Environment for operation of processes',
+  '7.1.5':'Monitoring and measuring resources',
+  '7.2':'Competence',
+  '7.3':'Awareness',
+  '7.5':'Documented information',
+  '7.5.2':'Creating and updating documented information',
+  '7.5.3':'Control of documented information',
+  '8':'Operation',
+  '8.2':'Requirements for products and services',
+  '8.3':'Design and development of products and services',
+  '8.3.6':'Design and development changes',
+  '8.4':'Control of externally provided processes, products and services',
+  '8.4.1':'General requirements for externally provided processes',
+  '8.5':'Production and service provision',
+  '8.5.1':'Control of production and service provision',
+  '8.5.2':'Identification and traceability',
+  '8.5.3':'Property belonging to customers or external providers',
+  '8.5.4':'Preservation',
+  '8.5.5':'Post-delivery activities',
+  '8.5.6':'Control of changes',
+  '8.6':'Release of products and services',
+  '8.7':'Control of nonconforming outputs',
+  '8.7.1':'Control of nonconforming product or service outputs',
+  '9':'Performance evaluation',
+  '9.1':'Monitoring, measurement, analysis and evaluation',
+  '9.1.2':'Customer satisfaction',
+  '9.2':'Internal audit',
+  '9.3':'Management review',
+  '9.3.3':'Management review outputs',
+  '10':'Improvement',
+  '10.2':'Nonconformity and corrective action'
+};
+function clauseName(clause){
+  return String(clause||'—').trim()||'—';
+}
+function clauseKey(clause){
+  var m=clauseName(clause).replace(/AS9100D|ISO\s*9001|ISO\s*14001|ISO\s*45001/ig,'').match(/(\d+(?:\.\d+)*)/);
+  return m?m[1]:'';
+}
+function clauseDescription(clause){
+  var key=clauseKey(clause);
+  while(key){
+    if(CLAUSE_DESCRIPTIONS[key])return CLAUSE_DESCRIPTIONS[key];
+    var parts=key.split('.');
+    parts.pop();
+    key=parts.join('.');
+  }
+  return 'Clause description not mapped';
+}
 const PAGE_META={
   dashboard:   {title:'Executive Dashboard',  sub:new Date().toLocaleString('en-US',{month:'long',year:'numeric'})+' · OnePWS',act:'+ New Audit'},
   analytics:   {title:'Analytics & Insights', sub:'Real-time compliance intelligence',act:'Export PDF'},
@@ -1645,11 +1725,14 @@ function sendEmail(to,subject,text,html,cc){
   });
 }
 function logEmail(type,to,cc,subject,status,attachment,error){
+  const log={id:'elog_'+Date.now()+'_'+Math.random().toString(16).slice(2),type:type,to:(to||[]).join(', '),cc:(cc||[]).join(', '),subject:subject,status:status,sentAt:new Date().toISOString(),attachment:attachment||'',retryCount:0,error:error||''};
   const logs=APP.emailLogs;
-  logs.unshift({id:'elog_'+Date.now()+'_'+Math.random().toString(16).slice(2),type:type,to:(to||[]).join(', '),cc:(cc||[]).join(', '),subject:subject,status:status,sentAt:new Date().toISOString(),attachment:attachment||'',retryCount:0,error:error||''});
-  APP.emailLogs=logs.slice(0,500);
+  logs.unshift(log);
+  localStorage.setItem('ap_email_logs',JSON.stringify(logs.slice(0,500)));
   if(_apiReady){
-    _apiFetch('/api/sync/ap_email_logs',{method:'PUT',body:JSON.stringify({value:APP.emailLogs,by:(APP.currentUser&&APP.currentUser.loginId)||'email-log'})}).catch(function(e){console.warn('Email log sync:',e.message);});
+    _apiFetch('/api/email/log',{method:'POST',body:JSON.stringify({log:log,by:(APP.currentUser&&APP.currentUser.loginId)||'email-log'})})
+      .then(function(data){if(data&&Array.isArray(data.value)){localStorage.setItem('ap_email_logs',JSON.stringify(data.value));if(APP.mdTab==='emaillogs')renderMdBody();}})
+      .catch(function(e){console.warn('Email log append:',e.message);_apiFetch('/api/sync/ap_email_logs',{method:'PUT',body:JSON.stringify({value:APP.emailLogs,by:(APP.currentUser&&APP.currentUser.loginId)||'email-log'})}).catch(function(err){console.warn('Email log sync:',err.message);});});
   }
 }
 function sendLoggedEmail(type,to,cc,subject,text,html,attachment){
@@ -2081,12 +2164,12 @@ function renderAnalytics(){
     </div>
     <div class="card">
       <div class="ch"><span class="dot" style="background:var(--green)"></span>Top Recurring NC Clauses</div>
-      <div class="tw"><table><thead><tr><th>#</th><th>Clause</th><th>NC Count</th><th>Severity Split</th></tr></thead><tbody>
+      <div class="tw"><table><thead><tr><th>#</th><th>Clause Name</th><th>Clause Description</th><th>NC Count</th><th>Severity Split</th></tr></thead><tbody>
         ${(function(){
           const ncSev={critical:1,major:1,minor:1};
           const clauseMap={};F.forEach(f=>{if(!ncSev[String(f.sev||'').toLowerCase()])return;const k=String(f.clause||'—').trim()||'—';if(!clauseMap[k])clauseMap[k]={clause:k,count:0,critical:0,major:0,minor:0};clauseMap[k].count++;clauseMap[k][String(f.sev).toLowerCase()]++;});
           const top10=Object.values(clauseMap).sort((a,b)=>b.count-a.count||a.clause.localeCompare(b.clause)).slice(0,10);
-          return top10.length?top10.map((t,i)=>'<tr><td class="pr">'+(i+1)+'</td><td>'+badge('b-blue',t.clause)+'</td><td style="font-weight:800;color:var(--'+(t.count>=5?'red':'amber')+');">'+t.count+'</td><td><span class="txs">'+t.critical+' Critical / '+t.major+' Major / '+t.minor+' Minor</span></td></tr>').join(''):'<tr><td colspan="4" style="text-align:center;color:var(--text3);padding:12px;">No NC findings yet</td></tr>';
+          return top10.length?top10.map((t,i)=>'<tr><td class="pr">'+(i+1)+'</td><td>'+badge('b-blue',clauseName(t.clause))+'</td><td style="max-width:210px;font-size:11px;">'+sanitize(clauseDescription(t.clause))+'</td><td style="font-weight:800;color:var(--'+(t.count>=5?'red':'amber')+');">'+t.count+'</td><td><span class="txs">'+t.critical+' Critical / '+t.major+' Major / '+t.minor+' Minor</span></td></tr>').join(''):'<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:12px;">No NC findings yet</td></tr>';
         })()}
       </tbody></table></div>
       <button class="btn btn-ghost btn-sm wf mt2" onclick="exportAnalyticsExcel()">Export Excel</button>
@@ -2126,6 +2209,20 @@ function exportAnalyticsExcel(){
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(kpiData),'KPIs');
   var deptData=depts.filter(d=>F.some(f=>f.dept===d.code)).map(d=>{var df=F.filter(f=>f.dept===d.code);return{Department:d.name,Total:df.length,Open:df.filter(f=>f.status!=='closed').length,Closed:df.filter(f=>f.status==='closed').length,AuditScore:auditScore(df)+'%',ClosureRate:closureRate(df)+'%'};});
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(deptData),'Departments');
+  var ncSev={critical:1,major:1,minor:1};
+  var clauseMap={};
+  F.forEach(function(f){
+    var sev=String(f.sev||'').toLowerCase();
+    if(!ncSev[sev])return;
+    var k=clauseName(f.clause);
+    if(!clauseMap[k])clauseMap[k]={ClauseName:k,ClauseDescription:clauseDescription(k),NCCount:0,Critical:0,Major:0,Minor:0};
+    clauseMap[k].NCCount++;
+    if(sev==='critical')clauseMap[k].Critical++;
+    if(sev==='major')clauseMap[k].Major++;
+    if(sev==='minor')clauseMap[k].Minor++;
+  });
+  var clauseData=Object.values(clauseMap).sort(function(a,b){return b.NCCount-a.NCCount||a.ClauseName.localeCompare(b.ClauseName);}).slice(0,10);
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(clauseData),'Recurring Clauses');
   var months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];var yr=new Date().getFullYear();
   var monthlyData=depts.filter(d=>F.some(f=>f.dept===d.code)).map(d=>{var row={Department:d.name};months.forEach(function(mn,mi){var mf=filteredFindings().filter(function(f){return f.dept===d.code&&new Date(f.due||f.date).getFullYear()===yr&&new Date(f.due||f.date).getMonth()===mi;});row[mn+'_Score']=mf.length?auditScore(mf)+'%':'—';row[mn+'_Closure']=mf.length?closureRate(mf)+'%':'—';});return row;});
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(monthlyData),'Monthly Trends');
@@ -3142,15 +3239,25 @@ function importEmailMaster(evt){
 }
 function renderEmailTemplates(canEdit){
   const list=APP.emailTemplates||[];const active=list.find(t=>t.id===(APP.emailTemplateId||''))||list[0]||{};APP.emailTemplateId=active.id;
-  return `<div class="grid g21 sg"><div class="card"><div class="ch"><span class="dot" style="background:var(--purple)"></span>Email Templates</div>${list.map(t=>`<div class="fcard ${APP.emailTemplateId===t.id?'minor':''}" onclick="APP.emailTemplateId='${t.id}';renderMdBody()"><div class="fb"><span class="f7">${sanitize(t.name)}</span>${badge(t.active!==false?'b-green':'b-gray',t.active!==false?'Active':'Disabled')}</div><div class="txs td">${sanitize(t.type)}</div></div>`).join('')}</div><div class="card"><div class="ch"><span class="dot" style="background:var(--brand)"></span>Edit Template</div><div style="display:flex;flex-direction:column;gap:8px;"><div><label class="lbl">Template Name</label><input id="et-name" value="${sanitize(active.name||'')}"></div><div><label class="lbl">Subject</label><input id="et-subject" value="${sanitize(active.subject||'')}"></div><div><label class="lbl">Body HTML</label><textarea id="et-body" style="height:190px;resize:vertical;">${sanitize(active.body||'')}</textarea></div><label style="display:flex;gap:6px;align-items:center;font-size:12px;"><input type="checkbox" id="et-active" ${active.active!==false?'checked':''}> Active</label><div class="txs td">Variables: {{department_name}}, {{audit_name}}, {{nc_number}}, {{target_date}}, {{delay_days}}, {{spoc_name}}, {{nc_table}}, {{window_days}}, {{escalation_level}}</div>${canEdit?`<div class="flex g2u"><button class="btn btn-brand" onclick="saveEmailTemplate()">Save Template</button><button class="btn btn-ghost" onclick="sendTestTemplate()">Send Test</button></div>`:''}</div></div></div>`;
+  return `<div class="grid g21 sg"><div class="card"><div class="ch"><span class="dot" style="background:var(--purple)"></span>Email Templates</div>${list.map(t=>`<div class="fcard ${APP.emailTemplateId===t.id?'minor':''}" onclick="APP.emailTemplateId='${t.id}';renderMdBody()"><div class="fb"><span class="f7">${sanitize(t.name)}</span>${badge(t.active!==false?'b-green':'b-gray',t.active!==false?'Active':'Disabled')}</div><div class="txs td">${sanitize(t.type)}</div></div>`).join('')}</div><div class="card"><div class="ch"><span class="dot" style="background:var(--brand)"></span>Edit Template</div><div style="display:flex;flex-direction:column;gap:8px;"><div><label class="lbl">Template Name</label><input id="et-name" value="${sanitize(active.name||'')}"></div><div><label class="lbl">Subject</label><input id="et-subject" value="${sanitize(active.subject||'')}"></div><div><label class="lbl">Body HTML</label><textarea id="et-body" style="height:190px;resize:vertical;">${sanitize(active.body||'')}</textarea></div><label style="display:flex;gap:6px;align-items:center;font-size:12px;"><input type="checkbox" id="et-active" ${active.active!==false?'checked':''}> Active</label><div class="txs td">Variables: {{department_name}}, {{audit_name}}, {{nc_number}}, {{target_date}}, {{delay_days}}, {{spoc_name}}, {{clause_name}}, {{clause_description}}, {{nc_table}}, {{window_days}}, {{escalation_level}}</div>${canEdit?`<div class="flex g2u"><button class="btn btn-brand" onclick="saveEmailTemplate()">Save Template</button><button class="btn btn-ghost" onclick="sendTestTemplate()">Send Test</button></div>`:''}</div></div></div>`;
 }
 function saveEmailTemplate(){const rows=APP.emailTemplates;const t=rows.find(x=>x.id===APP.emailTemplateId);if(!t)return;t.name=el('et-name').value.trim();t.subject=el('et-subject').value.trim();t.body=el('et-body').value;t.active=el('et-active').checked;t.updatedAt=new Date().toISOString();APP.emailTemplates=rows;renderMdBody();showToast('Template saved');}
-function renderEmailLogs(){const logs=APP.emailLogs||[];return `<div class="card"><div class="fb mb2"><div class="ch" style="margin:0"><span class="dot" style="background:var(--accent)"></span>Email Logs (${logs.length})</div><button class="btn btn-ghost btn-sm" onclick="APP.emailLogs=[];renderMdBody()">Clear Logs</button></div><div class="tw"><table><thead><tr><th>Type</th><th>To</th><th>CC</th><th>Subject</th><th>Status</th><th>Sent Date</th><th>Attachment</th></tr></thead><tbody>${logs.map(l=>`<tr><td>${sanitize(l.type)}</td><td>${sanitize(l.to)}</td><td>${sanitize(l.cc)}</td><td>${sanitize(l.subject)}</td><td>${badge(l.status==='sent'?'b-green':'b-red',l.status)}</td><td>${new Date(l.sentAt).toLocaleString()}</td><td>${sanitize(l.attachment||'-')}</td></tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--text3);padding:12px;">No email logs yet</td></tr>'}</tbody></table></div></div>`;}
+function renderEmailLogs(){const logs=APP.emailLogs||[];return `<div class="card"><div class="fb mb2"><div class="ch" style="margin:0"><span class="dot" style="background:var(--accent)"></span>Email Logs (${logs.length})</div><button class="btn btn-ghost btn-sm" onclick="clearEmailLogs()">Clear Logs</button></div><div class="tw"><table><thead><tr><th>Type</th><th>To</th><th>CC</th><th>Subject</th><th>Status</th><th>Sent Date</th><th>Attachment</th></tr></thead><tbody>${logs.map(l=>`<tr><td>${sanitize(l.type)}</td><td>${sanitize(l.to)}</td><td>${sanitize(l.cc)}</td><td>${sanitize(l.subject)}</td><td>${badge(l.status==='sent'?'b-green':'b-red',l.status)}</td><td>${new Date(l.sentAt).toLocaleString()}</td><td>${sanitize(l.attachment||'-')}</td></tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--text3);padding:12px;">No email logs yet</td></tr>'}</tbody></table></div></div>`;}
+function clearEmailLogs(){
+  confirmAct('Clear all email logs?',function(){
+    localStorage.setItem('ap_email_logs',JSON.stringify([]));
+    if(_apiReady){
+      _apiFetch('/api/sync/ap_email_logs',{method:'PUT',body:JSON.stringify({value:[],replace:true,by:(APP.currentUser&&APP.currentUser.loginId)||'email-log-clear'})})
+        .catch(function(e){console.warn('Email log clear:',e.message);});
+    }
+    renderMdBody();showToast('Email logs cleared');
+  });
+}
 function replaceTemplate(str,vars){return String(str||'').replace(/\{\{(\w+)\}\}/g,function(_,k){return vars[k]!==undefined?vars[k]:'';});}
-function ncTable(rows){return '<table border="1" cellpadding="6" cellspacing="0"><thead><tr><th>NC No.</th><th>Audit</th><th>Target Date</th><th>Status</th><th>Priority</th><th>Delay</th></tr></thead><tbody>'+rows.map(f=>'<tr><td>'+sanitize(f.ref)+'</td><td>'+sanitize(f.auditRef||f.auditId||'-')+'</td><td>'+sanitize(f.due||'-')+'</td><td>'+sanitize(STAT_LABEL[f.status]||f.status)+'</td><td>'+sanitize(SEV_LABEL[f.sev]||f.sev)+'</td><td>'+delayDays(f)+' day(s)</td></tr>').join('')+'</tbody></table>';}
+function ncTable(rows){return '<table border="1" cellpadding="6" cellspacing="0"><thead><tr><th>NC No.</th><th>Audit</th><th>Clause Name</th><th>Clause Description</th><th>Target Date</th><th>Status</th><th>Priority</th><th>Delay</th></tr></thead><tbody>'+rows.map(f=>'<tr><td>'+sanitize(f.ref)+'</td><td>'+sanitize(f.auditRef||f.auditId||'-')+'</td><td>'+sanitize(clauseName(f.clause))+'</td><td>'+sanitize(clauseDescription(f.clause))+'</td><td>'+sanitize(f.due||'-')+'</td><td>'+sanitize(STAT_LABEL[f.status]||f.status)+'</td><td>'+sanitize(SEV_LABEL[f.sev]||f.sev)+'</td><td>'+delayDays(f)+' day(s)</td></tr>').join('')+'</tbody></table>';}
 function delayDays(f){const d=new Date(f.due);if(isNaN(d))return 0;return Math.max(0,Math.floor((new Date()-d)/86400000));}
 function recipientsForDept(deptCode,mode,delay){const r=deptEmailRecord(deptCode);let to=spocEmails(deptCode),cc=[];if(mode==='audit'||mode==='delayed'||mode==='upcoming'){cc=deptManagerEmails(deptCode).concat(deptHodEmails(deptCode),managementEmails().slice(0,1));}if(mode==='escalation'){const m=(APP.escalationMatrix||DEF_ESCALATION_MATRIX).find(x=>delay>=x.min&&delay<=x.max)||DEF_ESCALATION_MATRIX[0];to=[];cc=[];(m.to||[]).forEach(k=>{if(k==='spoc')to=to.concat(spocEmails(deptCode));if(k==='manager')to=to.concat(deptManagerEmails(deptCode));if(k==='hod')to=to.concat(deptHodEmails(deptCode));if(k==='management')to=to.concat(deptManagementEmails(deptCode));});(m.cc||[]).forEach(k=>{if(k==='manager')cc=cc.concat(deptManagerEmails(deptCode));if(k==='hod')cc=cc.concat(deptHodEmails(deptCode));if(k==='management')cc=cc.concat(deptManagementEmails(deptCode));});}return {to:[...new Set(to.filter(Boolean))],cc:[...new Set(cc.filter(Boolean))],spocName:r.spocName||'Team'};}
-function sendTemplateEmail(type,deptCode,rows,extra){const d=APP.depts.find(x=>x.code===deptCode)||{code:deptCode,name:deptCode};const tpl=emailTpl(type);const rec=recipientsForDept(deptCode,type,rows.reduce((m,f)=>Math.max(m,delayDays(f)),0));const vars=Object.assign({department_name:d.name,spoc_name:rec.spocName,nc_count:rows.length,nc_table:ncTable(rows),window_days:5,escalation_level:extra?.escalation_level||'',audit_name:extra?.audit_name||'',submitted_at:new Date().toLocaleString()},extra||{});const subject=replaceTemplate(tpl.subject,vars);const html=replaceTemplate(tpl.body,vars);return sendLoggedEmail(type,rec.to,rec.cc,subject,html.replace(/<[^>]+>/g,' '),html,extra?.attachment||'');}
+function sendTemplateEmail(type,deptCode,rows,extra){const d=APP.depts.find(x=>x.code===deptCode)||{code:deptCode,name:deptCode};const tpl=emailTpl(type);const rec=recipientsForDept(deptCode,type,rows.reduce((m,f)=>Math.max(m,delayDays(f)),0));const first=rows&&rows[0]||{};const vars=Object.assign({department_name:d.name,spoc_name:rec.spocName,nc_count:rows.length,nc_number:first.ref||'',target_date:first.due||'',delay_days:delayDays(first),clause_name:clauseName(first.clause),clause_description:clauseDescription(first.clause),nc_table:ncTable(rows),window_days:5,escalation_level:extra?.escalation_level||'',audit_name:extra?.audit_name||'',submitted_at:new Date().toLocaleString()},extra||{});const subject=replaceTemplate(tpl.subject,vars);const html=replaceTemplate(tpl.body,vars);return sendLoggedEmail(type,rec.to,rec.cc,subject,html.replace(/<[^>]+>/g,' '),html,extra?.attachment||'');}
 function runEmailScheduler(mode){
   const today=new Date();const ncSev={critical:1,major:1,minor:1};let items=APP.findings.filter(f=>f.status!=='closed'&&ncSev[String(f.sev||'').toLowerCase()]);
   if(mode==='upcoming')items=items.filter(f=>{const d=new Date(f.due);const days=Math.ceil((d-today)/86400000);return days>=0&&days<=5;});
@@ -3160,7 +3267,7 @@ function runEmailScheduler(mode){
   const jobs=Object.keys(groups).map(dept=>sendTemplateEmail(type,dept,groups[dept],{escalation_level:mode==='escalation'?'auto':''}));
   Promise.all(jobs).then(()=>{renderMdBody();showToast('Scheduler processed '+jobs.length+' department summary email(s)');});
 }
-function sendTestTemplate(){const to=prompt('Send test email to:');if(!to)return;const t=(APP.emailTemplates||[]).find(x=>x.id===APP.emailTemplateId);if(!t)return;const vars={department_name:'Sample Department',spoc_name:'Sample SPOC',audit_name:'Sample Audit',nc_count:2,nc_number:'NC-001',target_date:new Date().toISOString().slice(0,10),delay_days:3,nc_table:'<table border="1" cellpadding="6"><tr><th>NC No.</th><th>Status</th></tr><tr><td>NC-001</td><td>Open</td></tr></table>',window_days:5,escalation_level:'1'};sendLoggedEmail('test',[to],[],replaceTemplate(t.subject,vars),replaceTemplate(t.body,vars).replace(/<[^>]+>/g,' '),replaceTemplate(t.body,vars),'');}
+function sendTestTemplate(){const to=prompt('Send test email to:');if(!to)return;const t=(APP.emailTemplates||[]).find(x=>x.id===APP.emailTemplateId);if(!t)return;const sampleRows=[{ref:'NC-001',auditRef:'AUD-001',clause:'AS9100D §8.5.2',due:new Date().toISOString().slice(0,10),status:'open',sev:'major'}];const vars={department_name:'Sample Department',spoc_name:'Sample SPOC',audit_name:'Sample Audit',nc_count:2,nc_number:'NC-001',target_date:new Date().toISOString().slice(0,10),delay_days:3,clause_name:'AS9100D §8.5.2',clause_description:clauseDescription('AS9100D §8.5.2'),nc_table:ncTable(sampleRows),window_days:5,escalation_level:'1'};sendLoggedEmail('test',[to],[],replaceTemplate(t.subject,vars),replaceTemplate(t.body,vars).replace(/<[^>]+>/g,' '),replaceTemplate(t.body,vars),'');}
 function sendAuditSubmissionEmail(audit,rows){return sendTemplateEmail('audit_submission',audit.dept,rows,{audit_name:audit.ref||audit.name||audit.deptName,attachment:'Audit Report PDF',submitted_at:new Date().toLocaleString()});}
 
 // Dept CRUD
