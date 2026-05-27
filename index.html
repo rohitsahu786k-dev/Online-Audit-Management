@@ -630,7 +630,7 @@ var API_BASE='';
 var _apiReady=false;
 
 // Keys to sync with MongoDB through the backend API (shared team data)
-var SYNC_KEYS=['ap_users','ap_depts','ap_auds','ap_cps','ap_finds','ap_learns','ap_completed_audits','ap_planned_audits','ap_import_logs','ap_capa_due','ap_secs','ap_notifs','ap_stds','ap_email_master','ap_email_templates','ap_email_logs','ap_escalation_matrix'];
+var SYNC_KEYS=['ap_users','ap_depts','ap_auds','ap_cps','ap_finds','ap_learns','ap_completed_audits','ap_planned_audits','ap_import_logs','ap_capa_due','ap_secs','ap_notifs','ap_stds','ap_email_master','ap_email_templates','ap_email_logs','ap_media_library','ap_escalation_matrix'];
 var _myWrites={};
 var _syncStatus='connecting';
 
@@ -665,6 +665,23 @@ function _sanitizeSyncData(k,data){
   return data;
 }
 
+function _emailLogKey(log){
+  if(!log||typeof log!=='object')return '';
+  return log.id||[log.type,log.to,log.cc,log.subject,log.status,log.sentAt].join('|');
+}
+function _mergeEmailLogs(local,remote){
+  var seen={};
+  return [].concat(Array.isArray(local)?local:[],Array.isArray(remote)?remote:[])
+    .filter(function(log){
+      var key=_emailLogKey(log);
+      if(!key||seen[key])return false;
+      seen[key]=true;
+      return true;
+    })
+    .sort(function(a,b){return new Date(b.sentAt||0)-new Date(a.sentAt||0);})
+    .slice(0,500);
+}
+
 function _refreshAfterSync(k){
   if(typeof APP==='undefined'||typeof renderPage!=='function')return;
   var page=APP.currentPage;
@@ -680,7 +697,8 @@ function _refreshAfterSync(k){
     ap_notifs:['dashboard','mytasks'],
     ap_email_master:['masterdata'],
     ap_email_templates:['masterdata'],
-    ap_email_logs:['masterdata']
+    ap_email_logs:['masterdata'],
+    ap_media_library:['media']
   };
   var pages=relevantPages[k]||[];
   if(pages.indexOf(page)>-1)renderPage(page);
@@ -892,6 +910,7 @@ const APP={
   get emailMaster() {return LS.init('ap_email_master',buildDefaultEmailMaster());}, set emailMaster(v){LS.set('ap_email_master',v);},
   get emailTemplates(){var r=normalizeEmailTemplates(LS.init('ap_email_templates',DEF_EMAIL_TEMPLATES));if(r.changed)LS.set('ap_email_templates',r.value);return r.value;}, set emailTemplates(v){LS.set('ap_email_templates',normalizeEmailTemplates(v).value);},
   get emailLogs()   {return LS.get('ap_email_logs',[]);},          set emailLogs(v) {LS.set('ap_email_logs',v);},
+  get mediaLibrary(){return LS.get('ap_media_library',[]);},        set mediaLibrary(v){LS.set('ap_media_library',v);},
   get escalationMatrix(){return LS.init('ap_escalation_matrix',DEF_ESCALATION_MATRIX);}, set escalationMatrix(v){LS.set('ap_escalation_matrix',v);},
   get session()     {return LS.get('ap_sess',null);},              set session(v)    {if(v)LS.set('ap_sess',v);else LS.del('ap_sess');},
   currentPage:'dashboard',
@@ -919,9 +938,11 @@ const APP={
   emailSearch:'',
   emailTemplateId:'tpl_audit_submission',
   mdCpPage:1,
+  mediaCategoryFilter:'all',
+  mediaSearch:'',
   admTab:'users',
   reportDeptFilter:'all',
-  reportStatusFilter:'closed',
+  reportStatusFilter:'completed',
   capaDeptFilter:'',
   capaStatusFilter:'',
 };
@@ -950,6 +971,14 @@ function initApiSync(){
       if(cloud[k]&&Object.prototype.hasOwnProperty.call(cloud[k],'value')){
         var remote=_sanitizeSyncData(k,cloud[k].value);
         var local=LS.get(k,null);
+        if(k==='ap_email_logs'){
+          var mergedLogs=_mergeEmailLogs(local,remote);
+          if(JSON.stringify(mergedLogs)!==JSON.stringify(local||[])){
+            localStorage.setItem(k,JSON.stringify(mergedLogs));
+            updated=true;
+          }
+          return;
+        }
         if(remote!==null&&remote!==undefined&&(!local||JSON.stringify(remote).length>=JSON.stringify(local).length)){
           localStorage.setItem(k,JSON.stringify(remote));
           updated=true;
@@ -991,6 +1020,14 @@ function pollApiSync(){
       var local=LS.get(k,null);
       var remoteText=JSON.stringify(remote);
       var localText=JSON.stringify(local);
+      if(k==='ap_email_logs'){
+        var mergedLogs=_mergeEmailLogs(local,remote);
+        if(JSON.stringify(mergedLogs)!==localText){
+          localStorage.setItem(k,JSON.stringify(mergedLogs));
+          _refreshAfterSync(k);
+        }
+        return;
+      }
       if(remoteText.indexOf('PHOTO_LOCAL_ONLY')>-1&&localText.length>remoteText.length)return;
       if(remoteText!==localText){
         localStorage.setItem(k,JSON.stringify(remote));
@@ -1013,11 +1050,11 @@ else window.addEventListener('load',function(){setTimeout(initApiSync,1000);});
 // PERMISSIONS
 // ═══════════════════════════════════════════════════
 const PERMS={
-  admin:  {ocp:1,dashboard:1,analytics:1,planning:1,execution:1,reports:1,findings:1,capa:1,learnings:1,masterdata:1,adminpanel:1,mytasks:1,managerpanel:1,mastertracker:1,importdata:1},
-  auditor:{ocp:1,dashboard:1,analytics:1,planning:1,execution:1,reports:1,findings:1,capa:1,learnings:1,masterdata:0,adminpanel:0,mytasks:1,mastertracker:1,importdata:1},
-  spoc:   {ocp:1,dashboard:1,analytics:1,planning:0,execution:0,reports:1,findings:1,capa:1,learnings:1,masterdata:0,adminpanel:0,mytasks:1,mastertracker:1,importdata:0},
-  manager:{ocp:1,dashboard:1,analytics:1,planning:0,execution:0,reports:1,findings:1,capa:1,learnings:1,masterdata:0,adminpanel:0,mytasks:1,managerpanel:1,mastertracker:1,importdata:0},
-  viewer: {ocp:1,dashboard:1,analytics:1,planning:0,execution:0,reports:1,findings:1,capa:0,learnings:0,masterdata:0,adminpanel:0,mytasks:1,mastertracker:0,importdata:0},
+  admin:  {ocp:1,dashboard:1,analytics:1,planning:1,execution:1,reports:1,findings:1,capa:1,learnings:1,media:1,masterdata:1,adminpanel:1,mytasks:1,managerpanel:1,mastertracker:1,importdata:1},
+  auditor:{ocp:1,dashboard:1,analytics:1,planning:1,execution:1,reports:1,findings:1,capa:1,learnings:1,media:1,masterdata:0,adminpanel:0,mytasks:1,mastertracker:1,importdata:1},
+  spoc:   {ocp:1,dashboard:1,analytics:1,planning:0,execution:0,reports:1,findings:1,capa:1,learnings:1,media:1,masterdata:0,adminpanel:0,mytasks:1,mastertracker:1,importdata:0},
+  manager:{ocp:1,dashboard:1,analytics:1,planning:0,execution:0,reports:1,findings:1,capa:1,learnings:1,media:1,masterdata:0,adminpanel:0,mytasks:1,managerpanel:1,mastertracker:1,importdata:0},
+  viewer: {ocp:1,dashboard:1,analytics:1,planning:0,execution:0,reports:1,findings:1,capa:0,learnings:0,media:1,masterdata:0,adminpanel:0,mytasks:1,mastertracker:0,importdata:0},
 };
 const ROLE_COLORS={admin:'#7c3aed',auditor:'#2563eb',spoc:'#16a34a',manager:'#d97706',viewer:'#6b7280'};
 const ROLE_LABELS={admin:'Master Admin',auditor:'Auditor',spoc:'Dept SPOC',manager:'Manager',viewer:'Mgmt Viewer'};
@@ -1099,6 +1136,7 @@ const PAGE_META={
   findings:    {title:'Findings Register',     sub:'Non-conformances · AS9100D §10.2',act:'Export Findings'},
   capa:        {title:'CAPA Tracker',          sub:'Corrective & Preventive Actions',act:'Export CAPA'},
   learnings:   {title:'Learnings Repository',  sub:'AI-assisted knowledge base',act:'+ Add Learning'},
+  media:       {title:'Media Library',         sub:'Cloudinary documents and evidence',act:'Refresh'},
   masterdata:  {title:'Master Data Library',   sub:'Single source of truth',act:'+ Add Record'},
   adminpanel:  {title:'Admin Panel',           sub:'Master Admin Controls · Restricted',act:'+ Add User'},
   mytasks:     {title:'My Pending Tasks',      sub:'Personalized task view',act:'Refresh'},
@@ -1115,7 +1153,7 @@ const NAV_CFG=[
   {sec:'My Workspace',items:[{id:'mytasks',l:'My Pending Tasks',ico:'clipboard-list'},{id:'managerpanel',l:'Manager Console',ico:'briefcase-business'}]},
   {sec:'Overview',    items:[{id:'dashboard',l:'Dashboard',ico:'layout-dashboard'},{id:'analytics',l:'Analytics',ico:'trending-up'}]},
   {sec:'Audit',       items:[{id:'planning',l:'Planning',ico:'calendar-days'},{id:'execution',l:'Execution',ico:'circle-check'},{id:'reports',l:'Reports',ico:'file-text'}]},
-  {sec:'Compliance',  items:[{id:'findings',l:'Findings',ico:'triangle-alert',badge:'findings'},{id:'capa',l:'CAPA Tracker',ico:'wrench',badge:'capa'},{id:'learnings',l:'Learnings',ico:'lightbulb'},{id:'mastertracker',l:'Master Tracker',ico:'files'}]},
+  {sec:'Compliance',  items:[{id:'findings',l:'Findings',ico:'triangle-alert',badge:'findings'},{id:'capa',l:'CAPA Tracker',ico:'wrench',badge:'capa'},{id:'learnings',l:'Learnings',ico:'lightbulb'},{id:'media',l:'Media Library',ico:'folder-open'},{id:'mastertracker',l:'Master Tracker',ico:'files'}]},
   {sec:'Master Data', items:[{id:'masterdata',l:'Master Library',ico:'database'},{id:'importdata',l:'Bulk Import',ico:'upload'}]},
   {sec:'Admin',       items:[{id:'adminpanel',l:'Admin Panel',ico:'shield',adminOnly:true}]},
   {sec:'Help',        items:[{id:'ocp',l:'OCP Manual',ico:'book-open'}]},
@@ -1594,6 +1632,7 @@ function renderPage(page){
     planning:renderPlanning,execution:renderExecution,
     reports:renderReports,findings:renderFindings,
     capa:renderCapa,learnings:renderLearnings,
+    media:renderMediaLibrary,
     masterdata:renderMasterdata,adminpanel:renderAdmin,
     mytasks:renderMytasks,managerpanel:renderManagerPanel,mastertracker:renderMasterTracker,
     importdata:renderImport,
@@ -1607,6 +1646,7 @@ function renderPage(page){
   if(page==='planning'){initCalendar();setTimeout(initDateDefaults,50);}
   if(page==='findings'){if(APP.currentUser?.role==='spoc'&&APP.currentUser?.dept){APP.findingsDeptFilter=APP.currentUser.dept;setTimeout(function(){var dd=el('f-dept');if(dd){dd.value=APP.currentUser.dept;dd.disabled=true;}},100);}renderFindingsTable();}
   if(page==='mastertracker')renderTrackerBody();
+  if(page==='media')renderMediaBody();
   if(page==='capa')setTimeout(filterCapaList,30);
   if(page==='masterdata')renderMdContent();
   if(page==='adminpanel')renderAdminContent();
@@ -1692,8 +1732,7 @@ function appDashboardUrl(){
 }
 function requiredCcEmails(toList){
   const toSet=new Set((toList||[]).map(x=>String(x).toLowerCase()));
-  const managers=(APP.users||[]).filter(u=>u.active!==false&&u.email&&u.role==='manager').map(u=>u.email);
-  return [...new Set([REQUIRED_CC_EMAIL].concat(managers).filter(Boolean))]
+  return [...new Set([REQUIRED_CC_EMAIL].filter(Boolean))]
     .filter(email=>!toSet.has(String(email).toLowerCase()));
 }
 function addEmailDashboardAccess(text,html){
@@ -1709,14 +1748,14 @@ function addEmailDashboardAccess(text,html){
   if(nextText&&!/Visit \/ Login to Dashboard/i.test(nextText))nextText+=linkText;
   return {text:nextText,html:nextHtml};
 }
-function sendEmail(to,subject,text,html,cc){
+function sendEmail(to,subject,text,html,cc,attachments){
   const recipients=Array.isArray(to)?to.flatMap(splitEmailList):splitEmailList(to);
   let ccList=Array.isArray(cc)?cc.flatMap(splitEmailList):splitEmailList(cc);
   ccList=[...new Set(ccList.concat(requiredCcEmails(recipients)))];
   const body=addEmailDashboardAccess(text,html);
   if(!recipients.length){showToast('⚠ No email recipient found');return Promise.reject(new Error('No recipient'));}
   showToast('📧 Sending email...');
-  return _apiFetch('/api/email',{method:'POST',body:JSON.stringify({to:recipients,cc:ccList,subject,text:body.text,html:body.html})}).then(function(){
+  return _apiFetch('/api/email',{method:'POST',body:JSON.stringify({to:recipients,cc:ccList,subject,text:body.text,html:body.html,attachments:attachments||[]})}).then(function(){
     showToast('✅ Email sent');
     return {to:recipients,cc:ccList};
   }).catch(function(e){
@@ -1735,8 +1774,8 @@ function logEmail(type,to,cc,subject,status,attachment,error){
       .catch(function(e){console.warn('Email log append:',e.message);_apiFetch('/api/sync/ap_email_logs',{method:'PUT',body:JSON.stringify({value:APP.emailLogs,by:(APP.currentUser&&APP.currentUser.loginId)||'email-log'})}).catch(function(err){console.warn('Email log sync:',err.message);});});
   }
 }
-function sendLoggedEmail(type,to,cc,subject,text,html,attachment){
-  return sendEmail(to,subject,text,html,cc).then(function(info){logEmail(type,info.to,info.cc,subject,'sent',attachment,'');return true;}).catch(function(e){const recipients=Array.isArray(to)?to.flatMap(splitEmailList):splitEmailList(to);const ccList=(Array.isArray(cc)?cc.flatMap(splitEmailList):splitEmailList(cc)).concat(requiredCcEmails(recipients));logEmail(type,recipients,[...new Set(ccList)],subject,'failed',attachment,e.message);return false;});
+function sendLoggedEmail(type,to,cc,subject,text,html,attachment,attachments){
+  return sendEmail(to,subject,text,html,cc,attachments).then(function(info){logEmail(type,info.to,info.cc,subject,'sent',attachment,'');return true;}).catch(function(e){const recipients=Array.isArray(to)?to.flatMap(splitEmailList):splitEmailList(to);const ccList=(Array.isArray(cc)?cc.flatMap(splitEmailList):splitEmailList(cc)).concat(requiredCcEmails(recipients));logEmail(type,recipients,[...new Set(ccList)],subject,'failed',attachment,e.message);return false;});
 }
 function managementEmails(){
   const emails=APP.users.filter(u=>u.active!==false&&u.email&&(u.role==='admin'||u.role==='viewer')).map(u=>u.email);
@@ -1752,19 +1791,50 @@ function spocEmails(deptCode){
   return [...new Set(emails)];
 }
 function deptEmailRecord(deptCode){return (APP.emailMaster||[]).find(x=>x.deptCode===deptCode&&x.status!=='inactive')||{};}
-function deptManagerEmails(deptCode){const r=deptEmailRecord(deptCode);return [...new Set(splitEmailList(r.reportingEmail))];}
+function deptManagerEmails(deptCode){const r=deptEmailRecord(deptCode);return [...new Set(splitEmailList(r.reportingEmail).concat(APP.users.filter(u=>u.active!==false&&u.email&&u.role==='manager'&&u.dept===deptCode).map(u=>u.email)))];}
 function deptHodEmails(deptCode){const r=deptEmailRecord(deptCode);return [...new Set(splitEmailList(r.hodEmail))];}
 function deptManagementEmails(deptCode){const r=deptEmailRecord(deptCode);return [...new Set(splitEmailList(r.managementEmail).concat(managementEmails()))];}
+function masterAdminEmails(){return [...new Set(APP.users.filter(u=>u.active!==false&&u.email&&u.role==='admin').map(u=>u.email))];}
+function deptAuditorEmails(deptCode){
+  const audits=(LS.get('ap_completed_audits',[])||[]).filter(a=>a.dept===deptCode);
+  const latest=audits[audits.length-1]||{};
+  const byName=APP.auditors.filter(a=>a.name&&latest.auditor&&a.name===latest.auditor).map(a=>a.email).filter(Boolean);
+  const userAuditors=APP.users.filter(u=>u.active!==false&&u.email&&u.role==='auditor'&&(!latest.auditor||u.name===latest.auditor||u.loginId===latest.auditor)).map(u=>u.email);
+  const current=APP.currentUser&&APP.currentUser.role==='auditor'&&APP.currentUser.email?[APP.currentUser.email]:[];
+  return [...new Set(byName.concat(userAuditors,current))];
+}
+function buildDeptReportAttachment(code){
+  if(!window.jspdf)return Promise.resolve(null);
+  const d=APP.depts.find(x=>x.code===code)||{name:code};
+  const df=reportFindingsForDept(code);
+  const score=auditScore(df);
+  const{jsPDF}=window.jspdf;const doc=new jsPDF();
+  doc.setFont('helvetica','bold');doc.setFontSize(14);doc.text('OnePWS Audit Report - '+d.name,14,18);
+  doc.setFont('helvetica','normal');doc.setFontSize(9);doc.text('Compliance: '+score+'% | Findings: '+df.length+' | Date: '+new Date().toLocaleDateString('en-IN'),14,26);
+  if(doc.autoTable){
+    doc.autoTable({startY:34,head:[['ID','Description','Severity','Status']],body:df.map(f=>[f.ref,f.desc,SEV_LABEL[f.sev]||f.sev,STAT_LABEL[f.status]||f.status]),styles:{fontSize:8},headStyles:{fillColor:[192,57,43],textColor:255}});
+  }
+  const dataUrl=doc.output('datauristring');
+  const fileName='OnePWS_'+d.name.replace(/\s+/g,'_')+'_AuditReport.pdf';
+  return _apiFetch('/api/media/upload',{method:'POST',body:JSON.stringify({fileName:fileName,dataUrl:dataUrl,module:'reports',category:'Email Attachments',relatedId:code,uploadedBy:(APP.currentUser&&APP.currentUser.loginId)||'browser'})})
+    .then(function(res){addMediaLocal(res.media);return {filename:fileName,url:res.media.secure_url,media:res.media};})
+    .catch(function(e){console.warn('Report PDF upload:',e.message);showToast('PDF upload failed; email will include report summary only');return null;});
+}
 function sendDeptReportEmail(code){
   const d=APP.depts.find(x=>x.code===code);if(!d)return;
   const df=filteredFindings().filter(f=>f.dept===code);
   const score=auditScore(df);
-  const to=managementEmails();
+  const to=spocEmails(code);
+  const cc=[...new Set(deptManagerEmails(code).concat(deptAuditorEmails(code),masterAdminEmails()))];
   const subject='OnePWS Audit Report - '+d.name+' - '+new Date().toLocaleDateString('en-IN');
   const text='Department: '+d.name+'\nCompliance Score: '+score+'%\nFindings: '+df.length+'\nOpen CAPA: '+df.filter(f=>f.status!=='closed').length+'\n\nPlease open OnePWS AuditPro for PDF/Excel report details.';
   const rows=df.slice(0,12).map(f=>'<tr><td>'+sanitize(f.ref)+'</td><td>'+sanitize(f.desc)+'</td><td>'+sanitize(SEV_LABEL[f.sev]||f.sev)+'</td><td>'+sanitize(STAT_LABEL[f.status]||f.status)+'</td></tr>').join('');
   const html='<h3>OnePWS Audit Report - '+sanitize(d.name)+'</h3><p><b>Compliance Score:</b> '+score+'%<br><b>Total Findings:</b> '+df.length+'</p><table border="1" cellpadding="6" cellspacing="0"><thead><tr><th>ID</th><th>Description</th><th>Severity</th><th>Status</th></tr></thead><tbody>'+(rows||'<tr><td colspan="4">No findings</td></tr>')+'</tbody></table>';
-  return sendLoggedEmail('dept_report',to,deptManagerEmails(code),subject,text,html,'');
+  return buildDeptReportAttachment(code).then(function(att){
+    const attachmentLabel=att&&att.url?att.url:'';
+    const attachments=att?[{filename:att.filename,url:att.url}]:[];
+    return sendLoggedEmail('dept_report',to,cc,subject,text,html,attachmentLabel,attachments);
+  });
 }
 function sendCapaReminder(key){
   const f=findCapa(key);if(!f)return;
@@ -2569,25 +2639,90 @@ function saveFinding(){
 function removeFinding(qId){delete AS.findings[qId];saveAS();renderSecNav();renderSection();updateProg();showToast('Finding removed');}
 
 // FILE UPLOADS
+function mediaUrl(f){return f?(f.secure_url||f.url||f.data||''):'';}
+function isImageMedia(f){
+  var u=mediaUrl(f);
+  return !!(f&&(f.resource_type==='image'||f.file_type==='image'||/^data:image/i.test(u)||/\.(png|jpe?g|jpeg|webp|gif)(\?|#|$)/i.test(u)));
+}
+function mediaIcon(f){
+  var u=mediaUrl(f),t=(f&&f.file_type)||'';
+  if(t==='pdf'||/\.pdf(\?|#|$)/i.test(u))return 'PDF';
+  if(t==='video'||/\.(mp4|mov|webm)(\?|#|$)/i.test(u))return 'VID';
+  return 'DOC';
+}
+function mediaCategoryFor(type,file){
+  var name=(file&&file.name||'').toLowerCase();
+  if(type==='finding')return 'NC Evidence';
+  if(type==='closure')return 'Closure Evidence';
+  if(/\.pdf$/.test(name))return 'Audit Reports';
+  if(/\.(png|jpe?g|webp|gif)$/.test(name))return 'Images';
+  if(/\.(mp4|mov|webm)$/.test(name))return 'Videos';
+  return 'Documents';
+}
+function addMediaLocal(media){
+  if(!media)return;
+  var rows=APP.mediaLibrary||[];
+  rows=[media].concat(rows.filter(function(x){return x&&x.public_id!==media.public_id;})).slice(0,1000);
+  APP.mediaLibrary=rows;
+}
+function uploadMediaFile(file,dataUrl,type){
+  var moduleName=type==='closure'?'closure':'finding';
+  var relatedId=type==='finding'?(APP.activeFindingQ||''):(APP.activeReviewId||'');
+  return _apiFetch('/api/media/upload',{
+    method:'POST',
+    body:JSON.stringify({
+      fileName:file.name,
+      dataUrl:dataUrl,
+      module:moduleName,
+      category:mediaCategoryFor(type,file),
+      relatedId:relatedId,
+      uploadedBy:(APP.currentUser&&APP.currentUser.loginId)||'browser'
+    })
+  }).then(function(res){
+    addMediaLocal(res.media);
+    return Object.assign({name:file.name,data:res.media.secure_url},res.media);
+  });
+}
+function readUploadFile(file,type,done){
+  const r=new FileReader();
+  r.onload=function(e){
+    var data=e.target.result;
+    var finish=function(payload){
+      uploadMediaFile(file,payload,type).then(function(obj){done(obj);})
+        .catch(function(err){
+          console.warn('Cloudinary upload:',err.message);
+          showToast('Cloudinary upload failed; file kept locally');
+          done({name:file.name,data:payload,uploadError:err.message});
+        });
+    };
+    if(/^data:image/i.test(data))compressImage(data,1200,900,0.72,finish);
+    else finish(data);
+  };
+  r.readAsDataURL(file);
+}
 function handleFiles(evt,type){
   Array.from(evt.target.files).forEach(f=>{
-    const r=new FileReader();
-    r.onload=e=>{
-      compressImage(e.target.result,600,400,0.5,function(compressed){
-        const obj={name:f.name,data:compressed};
-        if(type==='finding'){APP.evidenceFiles.push(obj);renderPreviews('fm-prev',APP.evidenceFiles);}
-        else{APP.closureFiles.push(obj);renderPreviews('cl-prev',APP.closureFiles);}
-      });
-    };r.readAsDataURL(f);
+    showToast('Uploading '+f.name+'...');
+    readUploadFile(f,type,function(obj){
+      if(type==='finding'){APP.evidenceFiles.push(obj);renderPreviews('fm-prev',APP.evidenceFiles);}
+      else{APP.closureFiles.push(obj);renderPreviews('cl-prev',APP.closureFiles);}
+      if(!obj.uploadError)showToast('Uploaded to Cloudinary');
+    });
   });
+  if(evt.target)evt.target.value='';
 }
 function handleDrop(evt,type){
   evt.preventDefault();el('fm-ua')?.classList.remove('drag');
-  Array.from(evt.dataTransfer.files).forEach(f=>{const r=new FileReader();r.onload=e=>{APP.evidenceFiles.push({name:f.name,data:e.target.result});renderPreviews('fm-prev',APP.evidenceFiles);};r.readAsDataURL(f);});
+  Array.from(evt.dataTransfer.files).forEach(f=>{
+    readUploadFile(f,type,function(obj){
+      if(type==='closure'){APP.closureFiles.push(obj);renderPreviews('cl-prev',APP.closureFiles);}
+      else{APP.evidenceFiles.push(obj);renderPreviews('fm-prev',APP.evidenceFiles);}
+    });
+  });
 }
 function renderPreviews(cid,files){
   const c=el(cid);if(!c)return;
-  c.innerHTML=files.map((f,i)=>`<div class="upthumb">${f.data?.startsWith('data:image')?`<img src="${f.data}">`:`<div style="width:100%;height:100%;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:16px;">📄</div>`}<div class="xb" onclick="removeFile('${cid}',${i})">✕</div></div>`).join('');
+  c.innerHTML=files.map((f,i)=>`<div class="upthumb">${isImageMedia(f)?`<img src="${mediaUrl(f)}">`:`<div style="width:100%;height:100%;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:var(--text3);">${mediaIcon(f)}</div>`}<div class="xb" onclick="removeFile('${cid}',${i})">✕</div></div>`).join('');
 }
 function removeFile(cid,idx){
   if(cid==='fm-prev'){APP.evidenceFiles.splice(idx,1);renderPreviews('fm-prev',APP.evidenceFiles);}
@@ -2601,24 +2736,32 @@ function removeFile(cid,idx){
 // ═══════════════════════════════════════════════════
 function reportFindingsForDept(code){
   let rows=filteredFindings().filter(f=>f.dept===code);
-  const status=APP.reportStatusFilter||'closed';
-  if(status==='open')rows=rows.filter(f=>f.status!=='closed');
-  if(status==='closed')rows=rows.filter(f=>f.status==='closed');
+  const status=APP.reportStatusFilter||'completed';
+  if(status==='completed'){
+    const audits=(LS.get('ap_completed_audits',[])||[]).filter(a=>a.dept===code);
+    const auditIds=new Set(audits.flatMap(a=>[a.id,a.ref].filter(Boolean)));
+    const refs=new Set(audits.flatMap(a=>a.findingRefs||[]));
+    rows=rows.filter(f=>auditIds.has(f.auditId)||auditIds.has(f.auditRef)||refs.has(f.ref));
+  }
   return rows;
 }
 function reportDeptList(){
-  if(APP.currentUser?.role==='spoc')return APP.depts.filter(d=>d.code===APP.currentUser?.dept);
-  return APP.reportDeptFilter&&APP.reportDeptFilter!=='all'?APP.depts.filter(d=>d.code===APP.reportDeptFilter):APP.depts;
+  var depts=APP.currentUser?.role==='spoc'?APP.depts.filter(d=>d.code===APP.currentUser?.dept):(APP.reportDeptFilter&&APP.reportDeptFilter!=='all'?APP.depts.filter(d=>d.code===APP.reportDeptFilter):APP.depts);
+  if((APP.reportStatusFilter||'completed')==='completed'){
+    const done=new Set((LS.get('ap_completed_audits',[])||[]).map(a=>a.dept));
+    depts=depts.filter(d=>done.has(d.code));
+  }
+  return depts;
 }
 function setReportStatusFilter(status){
-  APP.reportStatusFilter=status||'closed';
+  APP.reportStatusFilter=status||'completed';
   APP.reportDeptFilter=APP.reportDeptFilter||'all';
   renderPage('reports');
 }
 function renderReports(){
   const stds=APP.standards.map(id=>AUDIT_STANDARDS.find(s=>s.id===id)?.label||id).join(' + ');
-  const activeStatus=APP.reportStatusFilter||'closed';
-  const statusBtns=[['all','All'],['open','Open'],['closed','Close']];
+  const activeStatus=APP.reportStatusFilter||'completed';
+  const statusBtns=[['all','All'],['completed','Completed']];
   const visibleDepts=reportDeptList();
   return`
   <div class="card sg">
@@ -2652,7 +2795,7 @@ function toggleStdReport(id){
 }
 function filterReportDept(code){
   APP.reportDeptFilter=code;
-  const depts=code==='all'?APP.depts:APP.depts.filter(d=>d.code===code);
+  const depts=reportDeptList();
   el('report-cards').innerHTML=genReportCards(depts);
   // Update highlighting
   document.querySelectorAll('.rpt-dept-btn,#rpt-btn-all').forEach(b=>{b.className='badge b-gray';b.style.cssText='cursor:pointer;padding:5px 10px;font-size:11px;';});
@@ -2733,11 +2876,11 @@ function showDeptReport(code){
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">'+
         '<div style="border:2px solid #2563eb;border-radius:6px;overflow:hidden;">'+
           '<div style="background:#2563eb;color:#fff;text-align:center;padding:5px;font-size:10px;font-weight:800;letter-spacing:1px;">BEFORE PHOTO</div>'+
-          (photos[0]&&photos[0].data&&photos[0].data.startsWith('data:image')?'<img src="'+photos[0].data+'" style="width:100%;height:140px;object-fit:cover;">':'<div style="height:140px;background:var(--bg2);display:flex;align-items:center;justify-content:center;color:var(--text3);">No Photo</div>')+
+          (photos[0]&&isImageMedia(photos[0])?'<img src="'+mediaUrl(photos[0])+'" style="width:100%;height:140px;object-fit:cover;">':'<div style="height:140px;background:var(--bg2);display:flex;align-items:center;justify-content:center;color:var(--text3);">No Photo</div>')+
         '</div>'+
         '<div style="border:2px solid #16a34a;border-radius:6px;overflow:hidden;">'+
           '<div style="background:#16a34a;color:#fff;text-align:center;padding:5px;font-size:10px;font-weight:800;letter-spacing:1px;">AFTER PHOTO</div>'+
-          (photos[1]&&photos[1].data&&photos[1].data.startsWith('data:image')?'<img src="'+photos[1].data+'" style="width:100%;height:140px;object-fit:cover;">':'<div style="height:140px;background:var(--bg2);display:flex;align-items:center;justify-content:center;color:var(--text3);">No Photo</div>')+
+          (photos[1]&&isImageMedia(photos[1])?'<img src="'+mediaUrl(photos[1])+'" style="width:100%;height:140px;object-fit:cover;">':'<div style="height:140px;background:var(--bg2);display:flex;align-items:center;justify-content:center;color:var(--text3);">No Photo</div>')+
         '</div></div>'+
         (f.closureEvidence?'<div style="margin-top:8px;font-size:11px;"><span style="color:#16a34a;font-weight:700;">Corrective Action:</span><br>'+f.closureEvidence+'</div>':'')+
         (f.decision?'<div style="margin-top:4px;font-size:11px;"><span style="color:#d97706;font-weight:700;">Auditor Remarks:</span><br>'+(f.decisionComments||'—')+'</div>':'')+
@@ -3043,7 +3186,7 @@ function renderCapaDetail(f){
   </div>
   ${f.closureEvidence?`<div style="background:var(--green-bg);border:1px solid #86efac;border-radius:7px;padding:9px;margin-bottom:11px;">
     <div class="txs f7 mb1">📋 Closure Evidence Submitted</div><div class="txs tm">${f.closureEvidence}</div>
-    ${f.closureFiles?.length?`<div class="evpair mt2">${f.closureFiles.slice(0,2).map((fl,i)=>`<div class="evbox"><div class="evlabel">${i===0?'Before':'After'}</div>${fl.data?.startsWith('data:image')?`<img src="${fl.data}">`:'<div class="evph">📷</div>'}</div>`).join('')}</div>`:''}
+    ${f.closureFiles?.length?`<div class="evpair mt2">${f.closureFiles.slice(0,2).map((fl,i)=>`<div class="evbox"><div class="evlabel">${i===0?'Before':'After'}</div>${isImageMedia(fl)?`<img src="${mediaUrl(fl)}">`:'<div class="evph">'+mediaIcon(fl)+'</div>'}</div>`).join('')}</div>`:''}
     <div class="txs td mt1">By ${f.closureSubmittedBy||'—'} · ${f.closureDate||'—'}</div>
   </div>`:''}
   ${f.decision?`<div style="background:${f.decision==='accept'?'var(--green-bg)':'var(--red-bg)'};border:1px solid ${f.decision==='accept'?'#86efac':'#fca5a5'};border-radius:7px;padding:9px;margin-bottom:11px;">
@@ -3109,7 +3252,7 @@ function submitClosure(){
 }
 function openReviewModal(key){
   APP.activeReviewId=key;const f=findCapa(key);
-  el('rev-content').innerHTML=f?`<div style="background:var(--bg3);border-radius:7px;padding:9px;font-size:12px;"><div class="f7">${f.ref}: ${f.desc}</div><div class="txs td mt1">By ${f.closureSubmittedBy} · ${f.closureDate}</div><div class="mt2"><strong>Evidence:</strong><div class="tsm mt1">${f.closureEvidence}</div></div>${f.closureFiles?.length?`<div class="evpair mt2">${f.closureFiles.slice(0,2).map((fl,i)=>`<div class="evbox"><div class="evlabel">${i===0?'Before':'After'}</div>${fl.data?.startsWith('data:image')?`<img src="${fl.data}">`:'<div class="evph">📷</div>'}</div>`).join('')}</div>`:''}</div>`:'';
+  el('rev-content').innerHTML=f?`<div style="background:var(--bg3);border-radius:7px;padding:9px;font-size:12px;"><div class="f7">${f.ref}: ${f.desc}</div><div class="txs td mt1">By ${f.closureSubmittedBy} · ${f.closureDate}</div><div class="mt2"><strong>Evidence:</strong><div class="tsm mt1">${f.closureEvidence}</div></div>${f.closureFiles?.length?`<div class="evpair mt2">${f.closureFiles.slice(0,2).map((fl,i)=>`<div class="evbox"><div class="evlabel">${i===0?'Before':'After'}</div>${isImageMedia(fl)?`<img src="${mediaUrl(fl)}">`:'<div class="evph">'+mediaIcon(fl)+'</div>'}</div>`).join('')}</div>`:''}</div>`:'';
   el('rev-cmt').value='';openM('m-review');
 }
 function reviewDec(dec){
@@ -3122,7 +3265,9 @@ function reviewDec(dec){
 }
 function exportCapaExcel(){
   if(!window.XLSX){showToast('Excel loading...');return;}
-  const ws=XLSX.utils.json_to_sheet(APP.findings.filter(f=>f.status!=='closed').map(f=>({Ref:f.ref,Dept:f.deptName,Issue:f.desc,Severity:SEV_LABEL[f.sev],Clause:f.clause,Due:f.due,Status:STAT_LABEL[f.status]})));
+  const role=APP.currentUser?.role;
+  const rows=APP.findings.filter(f=>f.status!=='closed'&&(role!=='spoc'||f.dept===APP.currentUser?.dept)&&(role!=='manager'||managerDeptCodes().includes(f.dept)));
+  const ws=XLSX.utils.json_to_sheet(rows.map(f=>({Ref:f.ref,Dept:f.deptName,Issue:f.desc,Severity:SEV_LABEL[f.sev],Clause:f.clause,Due:f.due,Status:STAT_LABEL[f.status]})));
   const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'CAPA');
   XLSX.writeFile(wb,`OnePWS_CAPA_${Date.now()}.xlsx`);showToast('📊 CAPA exported!');
 }
@@ -3172,9 +3317,60 @@ function addLearning(){
 function delLearning(id){confirmAct('Delete this learning?',()=>{APP.learnings=APP.learnings.filter(x=>x.id!==id);renderPage('learnings');showToast('Deleted');});}
 function exportLearningsExcel(){
   if(!window.XLSX){showToast('Excel loading...');return;}
-  const ws=XLSX.utils.json_to_sheet(APP.learnings.map(l=>({Title:l.title,Dept:l.dept||'All',Clause:l.clause,Severity:SEV_LABEL[l.sev],'Root Cause':l.rc,'Preventive Action':l.pa})));
+  const rows=scopedLearnings();
+  const ws=XLSX.utils.json_to_sheet(rows.map(l=>({Title:l.title,Dept:l.dept||'All',Clause:l.clause,Severity:SEV_LABEL[l.sev],'Root Cause':l.rc,'Preventive Action':l.pa})));
   const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Learnings');
   XLSX.writeFile(wb,`OnePWS_Learnings_${Date.now()}.xlsx`);showToast('📊 Exported!');
+}
+
+// ═══════════════════════════════════════════════════
+// MEDIA LIBRARY
+// ═══════════════════════════════════════════════════
+function scopedLearnings(){
+  if(APP.currentUser?.role==='spoc')return APP.learnings.filter(l=>l.dept===APP.currentUser?.dept||!l.dept||l.dept==='All');
+  if(APP.currentUser?.role==='manager')return APP.learnings.filter(l=>!l.dept||l.dept==='All'||managerDeptCodes().includes(l.dept));
+  return APP.learnings;
+}
+function canExportGlobalData(){return ['admin','auditor'].includes(APP.currentUser?.role);}
+function mediaRows(){
+  var rows=APP.mediaLibrary||[];
+  var q=(APP.mediaSearch||'').toLowerCase().trim();
+  var cat=APP.mediaCategoryFilter||'all';
+  return rows.filter(function(m){
+    if(cat!=='all'&&String(m.category||m.file_type||'').toLowerCase()!==cat.toLowerCase())return false;
+    if(q&&![m.file_name,m.module,m.category,m.related_id,m.uploaded_by,m.file_type].join(' ').toLowerCase().includes(q))return false;
+    return true;
+  });
+}
+function mediaPreviewCell(m){
+  if(isImageMedia(m))return '<img src="'+mediaUrl(m)+'" style="width:44px;height:44px;object-fit:cover;border-radius:6px;border:1px solid var(--border);">';
+  return '<div style="width:44px;height:44px;border-radius:6px;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:900;color:var(--text3);border:1px solid var(--border);">'+mediaIcon(m)+'</div>';
+}
+function renderMediaLibrary(){
+  const cats=['all','Audit Reports','NC Evidence','Closure Evidence','Email Attachments','Images','Documents','Videos','Trash'];
+  return `<div class="card sg">
+    <div class="fb mb2"><div class="ch" style="margin:0"><span class="dot" style="background:var(--brand)"></span>Cloudinary Media Library</div><span class="badge b-blue">${(APP.mediaLibrary||[]).length} files</span></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      <input placeholder="Search Audit ID, NC, uploader, file type..." value="${sanitize(APP.mediaSearch||'')}" oninput="APP.mediaSearch=this.value;renderMediaBody()" style="min-width:260px;">
+      <select onchange="APP.mediaCategoryFilter=this.value;renderMediaBody()">${cats.map(c=>`<option value="${c}" ${APP.mediaCategoryFilter===c?'selected':''}>${c==='all'?'All Files':c}</option>`).join('')}</select>
+    </div>
+  </div>
+  <div class="card"><div id="media-body"></div></div>`;
+}
+function renderMediaBody(){
+  const body=el('media-body');if(!body)return;
+  const rows=mediaRows();
+  body.innerHTML=`<div class="tw"><table><thead><tr><th>Preview</th><th>File</th><th>Category</th><th>Module</th><th>Related</th><th>Uploaded By</th><th>Date</th><th>Action</th></tr></thead><tbody>${rows.map(m=>`<tr>
+    <td>${mediaPreviewCell(m)}</td>
+    <td class="pr" style="max-width:220px;">${sanitize(m.file_name||'File')}</td>
+    <td>${badge('b-blue',m.category||m.file_type||'File')}</td>
+    <td>${sanitize(m.module||'-')}</td>
+    <td>${sanitize(m.related_id||'-')}</td>
+    <td>${sanitize(m.uploaded_by||'-')}</td>
+    <td>${m.uploaded_at?new Date(m.uploaded_at).toLocaleString():'-'}</td>
+    <td><a class="btn btn-ghost btn-sm" href="${sanitize(mediaUrl(m))}" target="_blank" rel="noopener">Open</a></td>
+  </tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:14px;">No files uploaded yet</td></tr>'}</tbody></table></div>`;
+  renderIcons(body);
 }
 
 // ═══════════════════════════════════════════════════
@@ -3405,7 +3601,7 @@ function resetAll(){
     showToast('✅ All data reset. Reloading...');setTimeout(function(){location.reload();},1500);
   }
 }
-function exportAll(){const blob=new Blob([JSON.stringify({users:APP.users,depts:APP.depts,auditors:APP.auditors,checkpoints:APP.checkpoints,findings:APP.findings,learnings:APP.learnings,completedAudits:LS.get('ap_completed_audits',[]),importLogs:LS.get('ap_import_logs',[]),at:new Date().toISOString()},null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='OnePWS_Backup_'+Date.now()+'.json';a.click();URL.revokeObjectURL(a.href);showToast('📦 Full backup exported!');}
+function exportAll(){if(!canExportGlobalData()){showToast('Only Master Admin and Auditor can export all department data');return;}const blob=new Blob([JSON.stringify({users:APP.users,depts:APP.depts,auditors:APP.auditors,checkpoints:APP.checkpoints,findings:APP.findings,learnings:APP.learnings,completedAudits:LS.get('ap_completed_audits',[]),mediaLibrary:APP.mediaLibrary,importLogs:LS.get('ap_import_logs',[]),at:new Date().toISOString()},null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='OnePWS_Backup_'+Date.now()+'.json';a.click();URL.revokeObjectURL(a.href);showToast('📦 Full backup exported!');}
 
 // ═══════════════════════════════════════════════════
 // MY TASKS
@@ -3470,12 +3666,13 @@ function managerSendSummary(){
 // MASTER TRACKER
 // ═══════════════════════════════════════════════════
 function renderMasterTracker(){
+  const canGlobal=canExportGlobalData();
   return`
   <div class="tabs" id="tt"><div class="tab active" onclick="setTrackerTab('findings',this)">Findings</div><div class="tab" onclick="setTrackerTab('capa',this)">CAPA</div><div class="tab" onclick="setTrackerTab('learnings',this)">Learnings</div></div>
   <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
     <input id="tr-search" placeholder="🔍 Search..." style="min-width:200px;" oninput="APP.trackerSearch=this.value;renderTrackerBody()">
     <button class="btn btn-brand btn-sm" onclick="downloadTrackerExcel()">📊 Export Tab</button>
-    <button class="btn btn-primary btn-sm" onclick="downloadFullTrackerExcel()">📊 Export All (Excel)</button>
+    ${canGlobal?'<button class="btn btn-primary btn-sm" onclick="downloadFullTrackerExcel()">📊 Export All (Excel)</button>':''}
     <button class="btn btn-ghost btn-sm" onclick="downloadTrackerPDF()">📄 Export PDF</button>
   </div>
   <div class="card"><div id="tr-body"></div></div>`;
@@ -3497,7 +3694,7 @@ function renderTrackerBody(){
     data=data.slice((cpg-1)*cps2,cpg*cps2);
     tb.innerHTML=`<div class="tw"><table><thead><tr><th>Ref</th><th>Dept</th><th>Issue</th><th>Severity</th><th>Due</th><th>Days</th><th>Status</th><th>Action</th></tr></thead><tbody>${data.map(f=>{const dl=Math.round((new Date(f.due)-new Date())/86400000);return`<tr><td class="pr">${f.ref}</td><td>${f.deptName}</td><td style="max-width:160px;">${(f.desc||'').substring(0,55)}</td><td>${badge(SEV_BADGE[f.sev]||'b-gray',SEV_LABEL[f.sev]||f.sev)}</td><td>${f.due}</td><td style="color:${dl<0?'var(--red)':dl<=3?'var(--amber)':'inherit'};font-weight:${dl<0?800:400};">${dl<0?`${Math.abs(dl)}d over`:`${dl}d`}</td><td>${badge(STAT_BADGE[f.status]||'b-gray',STAT_LABEL[f.status]||f.status)}</td><td><button class="btn btn-ghost btn-sm" onclick="openCapa('${capaKey(f)}')">Open</button></td></tr>`;}).join('')}</tbody></table></div>${renderPagination(ctl,cpg,cps2,'setTrackerPage')}<div class="txs td mt1">${ctl} open CAPA(s)</div>`;}
   if(APP.trackerTab==='learnings'){
-    let data=APP.currentUser?.role==='spoc'?APP.learnings.filter(l=>l.dept===APP.currentUser?.dept||!l.dept||l.dept==='All'):APP.learnings;if(q)data=data.filter(l=>[l.title,l.rc,l.pa,l.clause].join(' ').toLowerCase().includes(q));
+    let data=scopedLearnings();if(q)data=data.filter(l=>[l.title,l.rc,l.pa,l.clause].join(' ').toLowerCase().includes(q));
     const lpg=APP.trackerPage||1;const lps=APP.pageSize;const ltl=data.length;
     data=data.slice((lpg-1)*lps,lpg*lps);
     tb.innerHTML=`<div class="tw"><table><thead><tr><th>Title</th><th>Dept</th><th>Clause</th><th>Severity</th><th>Root Cause</th><th>Preventive Action</th></tr></thead><tbody>${data.map(l=>`<tr><td class="pr">${l.title}</td><td>${l.dept||'All'}</td><td>${badge('b-blue',l.clause||'—')}</td><td>${badge(SEV_BADGE[l.sev]||'b-gray',SEV_LABEL[l.sev]||l.sev)}</td><td style="max-width:140px;font-size:11px;">${l.rc}</td><td style="max-width:140px;font-size:11px;">${l.pa}</td></tr>`).join('')}</tbody></table></div>${renderPagination(ltl,lpg,lps,'setTrackerPage')}<div class="txs td mt1">${ltl} learning(s)</div>`;}
@@ -3507,12 +3704,13 @@ function downloadTrackerExcel(){
   if(!window.XLSX){showToast('Excel loading...');return;}let data=[];
   if(APP.trackerTab==='findings')data=(APP.currentUser?.role==='spoc'?APP.findings.filter(f=>f.dept===APP.currentUser?.dept):(APP.currentUser?.role==='manager'?APP.findings.filter(f=>managerDeptCodes().includes(f.dept)):APP.findings)).map(f=>({ID:f.ref,Dept:f.deptName,Desc:f.desc,Sev:SEV_LABEL[f.sev],Clause:f.clause,Due:f.due,Status:STAT_LABEL[f.status]}));
   else if(APP.trackerTab==='capa')data=APP.findings.filter(f=>f.status!=='closed'&&(APP.currentUser?.role!=='spoc'||f.dept===APP.currentUser?.dept)&&(APP.currentUser?.role!=='manager'||managerDeptCodes().includes(f.dept))).map(f=>({Ref:f.ref,Dept:f.deptName,Issue:f.desc,Due:f.due,Status:STAT_LABEL[f.status]}));
-  else data=APP.learnings.map(l=>({Title:l.title,Dept:l.dept||'All',Clause:l.clause,Sev:SEV_LABEL[l.sev],'Root Cause':l.rc,'Preventive Action':l.pa}));
+  else data=scopedLearnings().map(l=>({Title:l.title,Dept:l.dept||'All',Clause:l.clause,Sev:SEV_LABEL[l.sev],'Root Cause':l.rc,'Preventive Action':l.pa}));
   const ws=XLSX.utils.json_to_sheet(data);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,APP.trackerTab);
   XLSX.writeFile(wb,`OnePWS_${APP.trackerTab}_${Date.now()}.xlsx`);showToast('📊 Excel exported!');
 }
 function downloadFullTrackerExcel(){
   if(!window.XLSX){showToast('Excel loading...');return;}
+  if(!canExportGlobalData()){showToast('Only Master Admin and Auditor can export all department data');return;}
   const wb=XLSX.utils.book_new();
   // Findings sheet
   const ws1=XLSX.utils.json_to_sheet(APP.findings.map(function(f){return{ID:f.ref,Department:f.deptName,Description:f.desc,Severity:SEV_LABEL[f.sev]||f.sev,Clause:f.clause,DueDate:f.due,Status:STAT_LABEL[f.status]||f.status,Type:f.type||'',AuditRef:f.auditRef||''};}));
@@ -3535,9 +3733,9 @@ function downloadTrackerPDF(){
   doc.setFillColor(192,57,43);doc.rect(0,0,pw,22,'F');doc.setTextColor(255,255,255);doc.setFontSize(12);doc.setFont('helvetica','bold');
   doc.text(`OnePWS Pvt. Ltd. — ${APP.trackerTab.toUpperCase()} Tracker`,pw/2,14,{align:'center'});
   doc.setTextColor(30,30,50);let rows=[],head=[];
-  if(APP.trackerTab==='findings'){head=[['ID','Dept','Description','Severity','Status']];rows=APP.findings.map(f=>[f.ref,f.deptName,f.desc,SEV_LABEL[f.sev],STAT_LABEL[f.status]]);}
-  else if(APP.trackerTab==='capa'){head=[['Ref','Dept','Issue','Status','Due']];rows=APP.findings.filter(f=>f.status!=='closed').map(f=>[f.ref,f.deptName,f.desc,STAT_LABEL[f.status],f.due]);}
-  else{head=[['Title','Dept','Clause','Severity']];rows=APP.learnings.map(l=>[l.title,l.dept||'All',l.clause,SEV_LABEL[l.sev]]);}
+  if(APP.trackerTab==='findings'){head=[['ID','Dept','Description','Severity','Status']];rows=(APP.currentUser?.role==='spoc'?APP.findings.filter(f=>f.dept===APP.currentUser?.dept):(APP.currentUser?.role==='manager'?APP.findings.filter(f=>managerDeptCodes().includes(f.dept)):APP.findings)).map(f=>[f.ref,f.deptName,f.desc,SEV_LABEL[f.sev],STAT_LABEL[f.status]]);}
+  else if(APP.trackerTab==='capa'){head=[['Ref','Dept','Issue','Status','Due']];rows=APP.findings.filter(f=>f.status!=='closed'&&(APP.currentUser?.role!=='spoc'||f.dept===APP.currentUser?.dept)&&(APP.currentUser?.role!=='manager'||managerDeptCodes().includes(f.dept))).map(f=>[f.ref,f.deptName,f.desc,STAT_LABEL[f.status],f.due]);}
+  else{head=[['Title','Dept','Clause','Severity']];rows=scopedLearnings().map(l=>[l.title,l.dept||'All',l.clause,SEV_LABEL[l.sev]]);}
   doc.autoTable({startY:26,head,body:rows,styles:{fontSize:8},headStyles:{fillColor:[192,57,43],textColor:255},margin:{left:14,right:14}});
   doc.setFontSize(7);doc.setTextColor(150,150,150);doc.text(`OnePWS Pvt. Ltd. | ${new Date().toLocaleString()}`,pw/2,288,{align:'center'});
   doc.save(`OnePWS_${APP.trackerTab}_${Date.now()}.pdf`);showToast('📄 PDF exported!');
@@ -4683,6 +4881,7 @@ function topAct(){
     findings:()=>exportFindingsExcel(),
     capa:()=>exportCapaExcel(),
     learnings:()=>el('l-title')?.focus(),
+    media:()=>renderMediaBody(),
     masterdata:()=>showToast('Use the + buttons inside each tab'),
     adminpanel:()=>openUserModal(),
     mytasks:()=>navigate('mytasks'),

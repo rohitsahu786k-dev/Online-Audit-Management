@@ -36,6 +36,7 @@ const SYNC_KEYS = [
   'ap_email_master',
   'ap_email_templates',
   'ap_email_logs',
+  'ap_media_library',
   'ap_escalation_matrix'
 ];
 const PASSWORD_RESET_KEY = '_password_reset_otps';
@@ -116,6 +117,57 @@ function parseRecipients(input) {
     return input.split(/[;,]/).map(v => v.trim()).filter(Boolean);
   }
   return [];
+}
+
+function getCloudinaryConfig() {
+  const url = process.env.CLOUDINARY_URL || '';
+  if (url) {
+    const match = url.match(/^cloudinary:\/\/([^:]+):([^@]+)@(.+)$/);
+    if (match) {
+      return {
+        apiKey: decodeURIComponent(match[1]),
+        apiSecret: decodeURIComponent(match[2]),
+        cloudName: decodeURIComponent(match[3])
+      };
+    }
+  }
+
+  return {
+    cloudName: process.env.CLOUDINARY_CLOUD_NAME,
+    apiKey: process.env.CLOUDINARY_API_KEY,
+    apiSecret: process.env.CLOUDINARY_API_SECRET
+  };
+}
+
+function cloudinarySignature(params, secret) {
+  const payload = Object.keys(params)
+    .filter(key => params[key] !== undefined && params[key] !== null && params[key] !== '')
+    .sort()
+    .map(key => `${key}=${params[key]}`)
+    .join('&');
+  return crypto.createHash('sha1').update(payload + secret).digest('hex');
+}
+
+function mediaTypeFromUpload(upload) {
+  if (!upload) return 'document';
+  if (upload.resource_type === 'image') return 'image';
+  if (upload.resource_type === 'video') return 'video';
+  if (String(upload.format || '').toLowerCase() === 'pdf') return 'pdf';
+  return 'document';
+}
+
+async function appendMediaRecord(media, by) {
+  const collection = await getCollection();
+  const current = await collection.findOne({ key: 'ap_media_library' });
+  const rows = Array.isArray(current && current.value) ? current.value : [];
+  const next = [media].concat(rows.filter(row => row && row.public_id !== media.public_id)).slice(0, 1000);
+  const now = new Date();
+  await collection.updateOne(
+    { key: 'ap_media_library' },
+    { $set: { key: 'ap_media_library', value: next, updatedAt: now, updatedBy: by || 'media-upload' } },
+    { upsert: true }
+  );
+  return next;
 }
 
 function emailLogKey(log) {
@@ -364,6 +416,11 @@ app.post('/api/email', wrapAsync(async (req, res) => {
   const subject = String((req.body && req.body.subject) || '').trim();
   const text = String((req.body && req.body.text) || '').trim();
   const html = req.body && req.body.html ? String(req.body.html) : undefined;
+  const attachments = Array.isArray(req.body && req.body.attachments)
+    ? req.body.attachments
+        .filter(item => item && item.url)
+        .map(item => ({ filename: String(item.filename || 'attachment'), path: String(item.url) }))
+    : [];
 
   if (!to.length) return res.status(400).json({ ok: false, error: 'At least one recipient is required' });
   if (!subject) return res.status(400).json({ ok: false, error: 'Subject is required' });
@@ -377,7 +434,8 @@ app.post('/api/email', wrapAsync(async (req, res) => {
     bcc,
     subject,
     text,
-    html
+    html,
+    attachments
   });
 
   res.json({ ok: true, messageId: info.messageId, accepted: info.accepted });
@@ -407,6 +465,62 @@ app.post('/api/email/log', wrapAsync(async (req, res) => {
   );
 
   res.json({ ok: true, count: value.length, value });
+}));
+
+app.post('/api/media/upload', wrapAsync(async (req, res) => {
+  const cfg = getCloudinaryConfig();
+  if (!cfg.cloudName || !cfg.apiKey || !cfg.apiSecret) {
+    return res.status(503).json({ ok: false, error: 'Cloudinary is not configured' });
+  }
+
+  const file = String((req.body && req.body.dataUrl) || '');
+  const fileName = String((req.body && req.body.fileName) || 'upload').trim();
+  const moduleName = String((req.body && req.body.module) || 'general').trim();
+  const category = String((req.body && req.body.category) || '').trim();
+  const relatedId = String((req.body && req.body.relatedId) || '').trim();
+  const uploadedBy = String((req.body && req.body.uploadedBy) || 'browser').trim();
+
+  if (!file || !/^data:|^https?:\/\//i.test(file)) {
+    return res.status(400).json({ ok: false, error: 'A data URL or URL file is required' });
+  }
+
+  const timestamp = Math.floor(Date.now() / 1000);
+  const folder = `onepws-auditpro/${moduleName.replace(/[^a-z0-9_-]+/gi, '-').toLowerCase()}`;
+  const signed = { folder, timestamp };
+  const form = new FormData();
+  form.append('file', file);
+  form.append('folder', folder);
+  form.append('timestamp', String(timestamp));
+  form.append('api_key', cfg.apiKey);
+  form.append('signature', cloudinarySignature(signed, cfg.apiSecret));
+
+  const response = await fetch(`https://api.cloudinary.com/v1_1/${cfg.cloudName}/auto/upload`, {
+    method: 'POST',
+    body: form
+  });
+  const upload = await response.json().catch(() => ({}));
+  if (!response.ok || upload.error) {
+    return res.status(response.status || 502).json({ ok: false, error: upload.error && upload.error.message ? upload.error.message : 'Cloudinary upload failed' });
+  }
+
+  const media = {
+    id: `media_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
+    file_name: fileName,
+    secure_url: upload.secure_url,
+    public_id: upload.public_id,
+    file_type: mediaTypeFromUpload(upload),
+    resource_type: upload.resource_type || '',
+    format: upload.format || '',
+    bytes: upload.bytes || 0,
+    module: moduleName,
+    category: category || mediaTypeFromUpload(upload),
+    related_id: relatedId,
+    uploaded_by: uploadedBy,
+    uploaded_at: new Date().toISOString()
+  };
+
+  await appendMediaRecord(media, uploadedBy);
+  res.json({ ok: true, media });
 }));
 
 app.post('/api/auth/forgot-password', wrapAsync(async (req, res) => {
