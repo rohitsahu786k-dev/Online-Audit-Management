@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5,user-scalable=yes">
-<title>ONEPWS AuditPro — Integrated QMS Portal</title>
+<title>OnePWS AuditPro — Integrated QMS Portal</title>
 <link rel="icon" type="image/png" href="assets/favicon.png">
 <link rel="shortcut icon" type="image/png" href="assets/favicon.png">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -385,7 +385,7 @@ input:focus,select:focus,textarea:focus{border-color:var(--brand);background:var
 <div id="login-screen">
   <div class="lc">
     <div class="lc-logo">
-      <img id="login-logo" src="" alt="ONEPWS">
+      <img id="login-logo" src="" alt="OnePWS">
       <p>Integrated Quality Audit Management Portal · AS9100D</p>
     </div>
     <div class="lerr" id="lerr">Invalid credentials. Please try again.</div>
@@ -407,8 +407,8 @@ input:focus,select:focus,textarea:focus{border-color:var(--brand);background:var
 <div id="app" class="hidden">
   <aside class="sidebar" id="sidebar">
     <div class="sb-logo">
-      <img id="sb-logo" src="" alt="ONEPWS">
-      <div class="sb-logo-txt"><h1>ONEPWS</h1><span>QMS Audit Portal</span></div>
+      <img id="sb-logo" src="" alt="OnePWS">
+      <div class="sb-logo-txt"><h1>OnePWS</h1><span>QMS Audit Portal</span></div>
     </div>
     <nav class="nav" id="nav" role="navigation" aria-label="Main navigation"></nav>
     <div class="sb-foot">
@@ -1011,7 +1011,7 @@ const SEV_LABEL={critical:'Critical',major:'Major',minor:'Minor',obs:'Observatio
 const STAT_BADGE={open:'b-red','in-progress':'b-amber',delayed:'b-red',closed:'b-green','pending-closure':'b-purple'};
 const STAT_LABEL={open:'Open','in-progress':'In Progress',delayed:'Delayed',closed:'Closed','pending-closure':'Pending Review'};
 const PAGE_META={
-  dashboard:   {title:'Executive Dashboard',  sub:new Date().toLocaleString('en-US',{month:'long',year:'numeric'})+' · ONEPWS',act:'+ New Audit'},
+  dashboard:   {title:'Executive Dashboard',  sub:new Date().toLocaleString('en-US',{month:'long',year:'numeric'})+' · OnePWS',act:'+ New Audit'},
   analytics:   {title:'Analytics & Insights', sub:'Real-time compliance intelligence',act:'Export PDF'},
   planning:    {title:'Audit Planning',        sub:'Annual schedule · 4 cycles/year',act:'+ Schedule Audit'},
   execution:   {title:'Audit Execution',       sub:'Active audit — Stores · —',act:'Save Draft'},
@@ -1677,17 +1677,17 @@ function sendDeptReportEmail(code){
   const df=filteredFindings().filter(f=>f.dept===code);
   const score=auditScore(df);
   const to=managementEmails();
-  const subject='ONEPWS Audit Report - '+d.name+' - '+new Date().toLocaleDateString('en-IN');
-  const text='Department: '+d.name+'\nCompliance Score: '+score+'%\nFindings: '+df.length+'\nOpen CAPA: '+df.filter(f=>f.status!=='closed').length+'\n\nPlease open ONEPWS AuditPro for PDF/Excel report details.';
+  const subject='OnePWS Audit Report - '+d.name+' - '+new Date().toLocaleDateString('en-IN');
+  const text='Department: '+d.name+'\nCompliance Score: '+score+'%\nFindings: '+df.length+'\nOpen CAPA: '+df.filter(f=>f.status!=='closed').length+'\n\nPlease open OnePWS AuditPro for PDF/Excel report details.';
   const rows=df.slice(0,12).map(f=>'<tr><td>'+sanitize(f.ref)+'</td><td>'+sanitize(f.desc)+'</td><td>'+sanitize(SEV_LABEL[f.sev]||f.sev)+'</td><td>'+sanitize(STAT_LABEL[f.status]||f.status)+'</td></tr>').join('');
-  const html='<h3>ONEPWS Audit Report - '+sanitize(d.name)+'</h3><p><b>Compliance Score:</b> '+score+'%<br><b>Total Findings:</b> '+df.length+'</p><table border="1" cellpadding="6" cellspacing="0"><thead><tr><th>ID</th><th>Description</th><th>Severity</th><th>Status</th></tr></thead><tbody>'+(rows||'<tr><td colspan="4">No findings</td></tr>')+'</tbody></table>';
+  const html='<h3>OnePWS Audit Report - '+sanitize(d.name)+'</h3><p><b>Compliance Score:</b> '+score+'%<br><b>Total Findings:</b> '+df.length+'</p><table border="1" cellpadding="6" cellspacing="0"><thead><tr><th>ID</th><th>Description</th><th>Severity</th><th>Status</th></tr></thead><tbody>'+(rows||'<tr><td colspan="4">No findings</td></tr>')+'</tbody></table>';
   return sendLoggedEmail('dept_report',to,deptManagerEmails(code),subject,text,html,'');
 }
 function sendCapaReminder(key){
   const f=findCapa(key);if(!f)return;
   const to=spocEmails(f.dept);
   const subject='CAPA Reminder - '+f.ref+' - '+(f.deptName||f.dept);
-  const text='CAPA reminder for '+f.ref+'\nDepartment: '+(f.deptName||f.dept)+'\nSeverity: '+(SEV_LABEL[f.sev]||f.sev)+'\nDue: '+(f.due||'Not set')+'\nStatus: '+(STAT_LABEL[f.status]||f.status)+'\n\nFinding: '+(f.desc||'')+'\n\nPlease update closure evidence in ONEPWS AuditPro.';
+  const text='CAPA reminder for '+f.ref+'\nDepartment: '+(f.deptName||f.dept)+'\nSeverity: '+(SEV_LABEL[f.sev]||f.sev)+'\nDue: '+(f.due||'Not set')+'\nStatus: '+(STAT_LABEL[f.status]||f.status)+'\n\nFinding: '+(f.desc||'')+'\n\nPlease update closure evidence in OnePWS AuditPro.';
   return sendLoggedEmail('capa_reminder',to,deptManagerEmails(f.dept),subject,text,'','');
 }
 document.addEventListener('click',e=>{
@@ -2100,7 +2100,7 @@ function exportAnalyticsPDF(){
   var F=APP.currentUser?.role==='spoc'?_baseFindingsPdf.filter(f=>f.dept===APP.currentUser?.dept):_baseFindingsPdf;
   doc.setFillColor(192,57,43);doc.rect(0,0,pw,26,'F');
   doc.setTextColor(255);doc.setFontSize(13);doc.setFont('helvetica','bold');
-  doc.text('ONEPWS Pvt. Ltd. — Analytics & KPI Report',pw/2,16,{align:'center'});
+  doc.text('OnePWS Pvt. Ltd. — Analytics & KPI Report',pw/2,16,{align:'center'});
   doc.setTextColor(30,30,50);
   doc.autoTable({startY:30,head:[['KPI','Value']],body:[
     ['Total Findings',''+F.length],
@@ -2113,8 +2113,8 @@ function exportAnalyticsPDF(){
   doc.autoTable({startY:doc.lastAutoTable.finalY+8,head:[['Department','Total','Open','Closed','Audit Score','Closure %']],
     body:depts.filter(d=>F.some(f=>f.dept===d.code)).map(d=>{var df=F.filter(f=>f.dept===d.code);return[d.name,df.length,df.filter(f=>f.status!=='closed').length,df.filter(f=>f.status==='closed').length,auditScore(df)+'%',closureRate(df)+'%'];}),
     styles:{fontSize:9},headStyles:{fillColor:[37,99,235],textColor:255},margin:{left:14,right:14}});
-  doc.setFontSize(7);doc.setTextColor(150);doc.text('ONEPWS Pvt. Ltd. | Analytics | '+new Date().toLocaleString(),pw/2,287,{align:'center'});
-  doc.save('ONEPWS_Analytics_'+Date.now()+'.pdf');showToast('PDF downloaded!');
+  doc.setFontSize(7);doc.setTextColor(150);doc.text('OnePWS Pvt. Ltd. | Analytics | '+new Date().toLocaleString(),pw/2,287,{align:'center'});
+  doc.save('OnePWS_Analytics_'+Date.now()+'.pdf');showToast('PDF downloaded!');
 }
 function exportAnalyticsExcel(){
   if(!window.XLSX){showToast('Excel loading...');return;}
@@ -2129,7 +2129,7 @@ function exportAnalyticsExcel(){
   var months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];var yr=new Date().getFullYear();
   var monthlyData=depts.filter(d=>F.some(f=>f.dept===d.code)).map(d=>{var row={Department:d.name};months.forEach(function(mn,mi){var mf=filteredFindings().filter(function(f){return f.dept===d.code&&new Date(f.due||f.date).getFullYear()===yr&&new Date(f.due||f.date).getMonth()===mi;});row[mn+'_Score']=mf.length?auditScore(mf)+'%':'—';row[mn+'_Closure']=mf.length?closureRate(mf)+'%':'—';});return row;});
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(monthlyData),'Monthly Trends');
-  XLSX.writeFile(wb,'ONEPWS_Analytics_'+Date.now()+'.xlsx');showToast('Excel exported!');
+  XLSX.writeFile(wb,'OnePWS_Analytics_'+Date.now()+'.xlsx');showToast('Excel exported!');
 }
 
 // ═══════════════════════════════════════════════════
@@ -2531,7 +2531,7 @@ function renderReports(){
     <div class="stdc">
       ${AUDIT_STANDARDS.map(s=>`<div class="stdchip ${APP.standards.includes(s.id)?'sel':''}" onclick="toggleStdReport('${s.id}')"><span style="width:8px;height:8px;border-radius:50%;background:${s.color};display:inline-block;"></span>${s.label}</div>`).join('')}
       <div class="stdchip sel" style="border-color:#7c3aed;background:#f5f3ff;color:#7c3aed;cursor:default;">
-        <span style="width:8px;height:8px;border-radius:50%;background:#7c3aed;display:inline-block;"></span>ONEPWS Internal (${APP.checkpoints.length})
+        <span style="width:8px;height:8px;border-radius:50%;background:#7c3aed;display:inline-block;"></span>OnePWS Internal (${APP.checkpoints.length})
       </div>
     </div>
   </div>
@@ -2596,7 +2596,7 @@ function showDeptReport(code){
   const rp=el('report-preview');rp.className='card sg';
   rp.innerHTML=`
   <div class="fb mb3" style="border-bottom:2px solid var(--brand);padding-bottom:11px;">
-    <div><div class="f7" style="font-size:14px;">INTERNAL QUALITY AUDIT REPORT</div><div class="txs td mt1">ONEPWS Pvt. Ltd. · ${d.name} · ${stds}</div></div>
+    <div><div class="f7" style="font-size:14px;">INTERNAL QUALITY AUDIT REPORT</div><div class="txs td mt1">OnePWS Pvt. Ltd. · ${d.name} · ${stds}</div></div>
     <div style="text-align:right;"><div class="txs td">SPOC: ${d.spoc}</div><div class="txs td">Last: ${d.lastAudit||'—'}</div><div class="txs td">${new Date().toLocaleDateString()}</div></div>
   </div>
   <div class="grid g4 mb3" style="gap:9px;">${[['Compliance',score+'%',sc],['Critical',c,'red'],['Major',ma,'amber'],['Minor',mi,'teal']].map(([l,v,col])=>`<div style="text-align:center;background:var(--bg3);border-radius:7px;padding:9px;"><div style="font-size:20px;font-weight:900;color:var(--${col})">${v}</div><div class="txx td">${l}</div></div>`).join('')}</div>
@@ -2672,7 +2672,7 @@ function genDeptPDF(code){
   // ── HEADER ──
   doc.setFillColor(192,57,43);doc.rect(0,0,pw,28,'F');
   doc.setTextColor(255);doc.setFontSize(15);doc.setFont('helvetica','bold');
-  doc.text('ONEPWS Pvt. Ltd.',pw/2,11,{align:'center'});
+  doc.text('OnePWS Pvt. Ltd.',pw/2,11,{align:'center'});
   doc.setFontSize(9);doc.setFont('helvetica','normal');
   doc.text('Internal Quality Audit Report — '+(d?d.name:code),pw/2,18,{align:'center'});
   doc.setFontSize(7);
@@ -2780,16 +2780,16 @@ function genDeptPDF(code){
   var totalPages=doc.internal.getNumberOfPages();
   for(var p=1;p<=totalPages;p++){
     doc.setPage(p);doc.setFontSize(7);doc.setTextColor(150,150,150);
-    doc.text('ONEPWS Pvt. Ltd. | '+(d?d.name:code)+' | Confidential | Page '+p+' of '+totalPages,pw/2,doc.internal.pageSize.getHeight()-6,{align:'center'});
+    doc.text('OnePWS Pvt. Ltd. | '+(d?d.name:code)+' | Confidential | Page '+p+' of '+totalPages,pw/2,doc.internal.pageSize.getHeight()-6,{align:'center'});
   }
-  doc.save('ONEPWS_'+(d?d.name:code).replace(/\s+/g,'_')+'_AuditReport.pdf');showToast('PDF downloaded!');
+  doc.save('OnePWS_'+(d?d.name:code).replace(/\s+/g,'_')+'_AuditReport.pdf');showToast('PDF downloaded!');
 }
 function genDeptExcel(code){
   if(!window.XLSX){showToast('Excel loading...');return;}
   const d=APP.depts.find(x=>x.code===code);const df=reportFindingsForDept(code);
   const ws=XLSX.utils.json_to_sheet(df.map(f=>({ID:f.ref,Department:f.deptName,Description:f.desc,Severity:SEV_LABEL[f.sev],Clause:f.clause,DueDate:f.due,Status:STAT_LABEL[f.status],CAPAStatus:STAT_LABEL[f.capaStatus||f.status]})));
   const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,(d?.name||code).substring(0,31));
-  XLSX.writeFile(wb,`ONEPWS_${(d?.name||code).replace(/\s+/g,'_')}_Audit.xlsx`);showToast('📊 Excel downloaded!');
+  XLSX.writeFile(wb,`OnePWS_${(d?.name||code).replace(/\s+/g,'_')}_Audit.xlsx`);showToast('📊 Excel downloaded!');
 }
 
 // ═══════════════════════════════════════════════════
@@ -2869,7 +2869,7 @@ function exportFindingsExcel(){
   if(!window.XLSX){showToast('Excel loading...');return;}
   const ws=XLSX.utils.json_to_sheet(APP.findings.map(f=>({ID:f.ref,Department:f.deptName,Description:f.desc,Severity:SEV_LABEL[f.sev],Clause:f.clause,DueDate:f.due,Status:STAT_LABEL[f.status]})));
   const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Findings');
-  XLSX.writeFile(wb,`ONEPWS_Findings_${Date.now()}.xlsx`);showToast('📊 Findings exported!');
+  XLSX.writeFile(wb,`OnePWS_Findings_${Date.now()}.xlsx`);showToast('📊 Findings exported!');
 }
 
 // ═══════════════════════════════════════════════════
@@ -3027,7 +3027,7 @@ function exportCapaExcel(){
   if(!window.XLSX){showToast('Excel loading...');return;}
   const ws=XLSX.utils.json_to_sheet(APP.findings.filter(f=>f.status!=='closed').map(f=>({Ref:f.ref,Dept:f.deptName,Issue:f.desc,Severity:SEV_LABEL[f.sev],Clause:f.clause,Due:f.due,Status:STAT_LABEL[f.status]})));
   const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'CAPA');
-  XLSX.writeFile(wb,`ONEPWS_CAPA_${Date.now()}.xlsx`);showToast('📊 CAPA exported!');
+  XLSX.writeFile(wb,`OnePWS_CAPA_${Date.now()}.xlsx`);showToast('📊 CAPA exported!');
 }
 
 // ═══════════════════════════════════════════════════
@@ -3077,7 +3077,7 @@ function exportLearningsExcel(){
   if(!window.XLSX){showToast('Excel loading...');return;}
   const ws=XLSX.utils.json_to_sheet(APP.learnings.map(l=>({Title:l.title,Dept:l.dept||'All',Clause:l.clause,Severity:SEV_LABEL[l.sev],'Root Cause':l.rc,'Preventive Action':l.pa})));
   const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Learnings');
-  XLSX.writeFile(wb,`ONEPWS_Learnings_${Date.now()}.xlsx`);showToast('📊 Exported!');
+  XLSX.writeFile(wb,`OnePWS_Learnings_${Date.now()}.xlsx`);showToast('📊 Exported!');
 }
 
 // ═══════════════════════════════════════════════════
@@ -3298,7 +3298,7 @@ function resetAll(){
     showToast('✅ All data reset. Reloading...');setTimeout(function(){location.reload();},1500);
   }
 }
-function exportAll(){const blob=new Blob([JSON.stringify({users:APP.users,depts:APP.depts,auditors:APP.auditors,checkpoints:APP.checkpoints,findings:APP.findings,learnings:APP.learnings,completedAudits:LS.get('ap_completed_audits',[]),importLogs:LS.get('ap_import_logs',[]),at:new Date().toISOString()},null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='ONEPWS_Backup_'+Date.now()+'.json';a.click();URL.revokeObjectURL(a.href);showToast('📦 Full backup exported!');}
+function exportAll(){const blob=new Blob([JSON.stringify({users:APP.users,depts:APP.depts,auditors:APP.auditors,checkpoints:APP.checkpoints,findings:APP.findings,learnings:APP.learnings,completedAudits:LS.get('ap_completed_audits',[]),importLogs:LS.get('ap_import_logs',[]),at:new Date().toISOString()},null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='OnePWS_Backup_'+Date.now()+'.json';a.click();URL.revokeObjectURL(a.href);showToast('📦 Full backup exported!');}
 
 // ═══════════════════════════════════════════════════
 // MY TASKS
@@ -3402,7 +3402,7 @@ function downloadTrackerExcel(){
   else if(APP.trackerTab==='capa')data=APP.findings.filter(f=>f.status!=='closed'&&(APP.currentUser?.role!=='spoc'||f.dept===APP.currentUser?.dept)&&(APP.currentUser?.role!=='manager'||managerDeptCodes().includes(f.dept))).map(f=>({Ref:f.ref,Dept:f.deptName,Issue:f.desc,Due:f.due,Status:STAT_LABEL[f.status]}));
   else data=APP.learnings.map(l=>({Title:l.title,Dept:l.dept||'All',Clause:l.clause,Sev:SEV_LABEL[l.sev],'Root Cause':l.rc,'Preventive Action':l.pa}));
   const ws=XLSX.utils.json_to_sheet(data);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,APP.trackerTab);
-  XLSX.writeFile(wb,`ONEPWS_${APP.trackerTab}_${Date.now()}.xlsx`);showToast('📊 Excel exported!');
+  XLSX.writeFile(wb,`OnePWS_${APP.trackerTab}_${Date.now()}.xlsx`);showToast('📊 Excel exported!');
 }
 function downloadFullTrackerExcel(){
   if(!window.XLSX){showToast('Excel loading...');return;}
@@ -3420,20 +3420,20 @@ function downloadFullTrackerExcel(){
   const cas=LS.get('ap_completed_audits',[])||[];
   const ws4=XLSX.utils.json_to_sheet(cas.map(function(a){return{Ref:a.ref||'',Department:a.deptName||'',Auditor:a.auditor||'',Date:a.date||'',Type:a.type||'',Standards:(a.standards||[]).join(', '),SubmittedAt:a.submittedAt||'',Findings:(a.findingRefs||[]).length};}));
   XLSX.utils.book_append_sheet(wb,ws4,'Completed Audits');
-  XLSX.writeFile(wb,'ONEPWS_MasterTracker_Full_'+Date.now()+'.xlsx');
+  XLSX.writeFile(wb,'OnePWS_MasterTracker_Full_'+Date.now()+'.xlsx');
   showToast('📊 Full Master Tracker exported!');
 }
 function downloadTrackerPDF(){
   if(!window.jspdf){showToast('PDF loading...');return;}const{jsPDF}=window.jspdf;const doc=new jsPDF();const pw=doc.internal.pageSize.getWidth();
   doc.setFillColor(192,57,43);doc.rect(0,0,pw,22,'F');doc.setTextColor(255,255,255);doc.setFontSize(12);doc.setFont('helvetica','bold');
-  doc.text(`ONEPWS Pvt. Ltd. — ${APP.trackerTab.toUpperCase()} Tracker`,pw/2,14,{align:'center'});
+  doc.text(`OnePWS Pvt. Ltd. — ${APP.trackerTab.toUpperCase()} Tracker`,pw/2,14,{align:'center'});
   doc.setTextColor(30,30,50);let rows=[],head=[];
   if(APP.trackerTab==='findings'){head=[['ID','Dept','Description','Severity','Status']];rows=APP.findings.map(f=>[f.ref,f.deptName,f.desc,SEV_LABEL[f.sev],STAT_LABEL[f.status]]);}
   else if(APP.trackerTab==='capa'){head=[['Ref','Dept','Issue','Status','Due']];rows=APP.findings.filter(f=>f.status!=='closed').map(f=>[f.ref,f.deptName,f.desc,STAT_LABEL[f.status],f.due]);}
   else{head=[['Title','Dept','Clause','Severity']];rows=APP.learnings.map(l=>[l.title,l.dept||'All',l.clause,SEV_LABEL[l.sev]]);}
   doc.autoTable({startY:26,head,body:rows,styles:{fontSize:8},headStyles:{fillColor:[192,57,43],textColor:255},margin:{left:14,right:14}});
-  doc.setFontSize(7);doc.setTextColor(150,150,150);doc.text(`ONEPWS Pvt. Ltd. | ${new Date().toLocaleString()}`,pw/2,288,{align:'center'});
-  doc.save(`ONEPWS_${APP.trackerTab}_${Date.now()}.pdf`);showToast('📄 PDF exported!');
+  doc.setFontSize(7);doc.setTextColor(150,150,150);doc.text(`OnePWS Pvt. Ltd. | ${new Date().toLocaleString()}`,pw/2,288,{align:'center'});
+  doc.save(`OnePWS_${APP.trackerTab}_${Date.now()}.pdf`);showToast('📄 PDF exported!');
 }
 
 // ═══════════════════════════════════════════════════
@@ -3518,7 +3518,7 @@ function processImportRows(rows,fname){
   const allLogs=LS.get('ap_import_logs',[])||[];allLogs.push(logEntry);LS.set('ap_import_logs',allLogs);
   LS.set('imp_log',log.join('<br>'));
   const ilog=el('im-log');if(ilog)ilog.innerHTML=log.join('<br>')||'No rows';
-  const cpNote=type==='checkpoints'?' These will appear as "ONEPWS Internal Checkpoints" in new audits.':'';
+  const cpNote=type==='checkpoints'?' These will appear as "OnePWS Internal Checkpoints" in new audits.':'';
   const iprev=el('im-prev');if(iprev)iprev.innerHTML=`<strong style="color:var(--green)">✅ ${imp} imported</strong><br>${errs} error(s).${cpNote}`;
   addNotif('audit','Import Complete',`${imp} ${type} record(s) imported from ${fname}${cpNote}`,'mastertracker',['admin','auditor']);
   buildNav();showToast(`✅ ${imp} ${type} imported, ${errs} error(s)`);
@@ -3574,23 +3574,23 @@ function exportImportedData(){
   if(impFindings.length){const ws=XLSX.utils.json_to_sheet(impFindings.map(f=>({ID:f.ref,Dept:f.deptName,Description:f.desc,Severity:SEV_LABEL[f.sev],Clause:f.clause,Status:STAT_LABEL[f.status]})));XLSX.utils.book_append_sheet(wb,ws,'Imported Findings');}
   const ws2=XLSX.utils.json_to_sheet(APP.checkpoints.filter(c=>c.id.startsWith('cpimp')).map(c=>({Question:c.text,Clause:c.clause,Dept:c.dept,Weight:c.weight})));
   XLSX.utils.book_append_sheet(wb,ws2,'Imported Checkpoints');
-  XLSX.writeFile(wb,'ONEPWS_Imported_Data_'+Date.now()+'.xlsx');showToast('📥 Imported data exported!');
+  XLSX.writeFile(wb,'OnePWS_Imported_Data_'+Date.now()+'.xlsx');showToast('📥 Imported data exported!');
 }
 function updateImportHint(){
   const t=el('im-type')?.value||'findings';const h=el('im-col-hint');if(!h)return;
   const hints={
     findings:'Upload Excel with columns: <strong>ID, Department, Description, Severity, Clause, DueDate, Status</strong><br><span style="font-size:11px;color:var(--text3);">Imports old NCs into the Findings Register, CAPA Tracker & Master Tracker.</span>',
     learnings:'Upload Excel with columns: <strong>Title, Department, Severity, Clause, Root Cause, Preventive Action</strong><br><span style="font-size:11px;color:var(--text3);">Imports lessons learned into the Learnings Repository for auditor reference.</span>',
-    checkpoints:'Upload Excel with columns: <strong>Question, Clause, Weight (1–5), Type, Department, Tip</strong><br><span style="font-size:11px;color:var(--purple);font-weight:700;">⭐ Imported checkpoints will automatically appear as an \"ONEPWS Internal Checkpoints\" section in every new audit for the matching department.</span>',
+    checkpoints:'Upload Excel with columns: <strong>Question, Clause, Weight (1–5), Type, Department, Tip</strong><br><span style="font-size:11px;color:var(--purple);font-weight:700;">⭐ Imported checkpoints will automatically appear as an \"OnePWS Internal Checkpoints\" section in every new audit for the matching department.</span>',
   };
   h.innerHTML=hints[t]||hints.findings;
 }
 function downloadImportTemplate(){
   if(!window.XLSX){showToast('Excel loading...');return;}
   const type=el('im-type')?.value||'findings';let data=[],fname='';
-  if(type==='findings'){data=[{ID:'STR-2025-001',Department:'Stores',Description:'Example finding',Severity:'major',Clause:'§8.5.2',DueDate:'2025-07-15',Status:'open'}];fname='ONEPWS_Findings_Template.xlsx';}
-  else if(type==='learnings'){data=[{Title:'Example Learning',Department:'Quality',Severity:'major',Clause:'§10.2','Root Cause':'Process gap','Preventive Action':'Update SOP'}];fname='ONEPWS_Learnings_Template.xlsx';}
-  else{data=[{Question:'Is process documented?',Clause:'§7.5',Weight:3,Type:'Yes/No',Department:'Production',Tip:'Check WIs'}];fname='ONEPWS_Checkpoints_Template.xlsx';}
+  if(type==='findings'){data=[{ID:'STR-2025-001',Department:'Stores',Description:'Example finding',Severity:'major',Clause:'§8.5.2',DueDate:'2025-07-15',Status:'open'}];fname='OnePWS_Findings_Template.xlsx';}
+  else if(type==='learnings'){data=[{Title:'Example Learning',Department:'Quality',Severity:'major',Clause:'§10.2','Root Cause':'Process gap','Preventive Action':'Update SOP'}];fname='OnePWS_Learnings_Template.xlsx';}
+  else{data=[{Question:'Is process documented?',Clause:'§7.5',Weight:3,Type:'Yes/No',Department:'Production',Tip:'Check WIs'}];fname='OnePWS_Checkpoints_Template.xlsx';}
   const ws=XLSX.utils.json_to_sheet(data);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Template');
   XLSX.writeFile(wb,fname);showToast('📥 Template downloaded!');
 }
@@ -3665,7 +3665,7 @@ function downloadOCPPDF(){navigate('ocp');}
 <script>
 
 // ═══════════════════════════════════════════════════════════════
-// ONEPWS AuditPro v4.1 — Standards-Based Dynamic Checklist Engine
+// OnePWS AuditPro v4.1 — Standards-Based Dynamic Checklist Engine
 // ═══════════════════════════════════════════════════════════════
 
 const STD_META={
@@ -3673,7 +3673,7 @@ const STD_META={
   iso9001: {id:'iso9001', label:'ISO 9001:2015', short:'ISO 9001',color:'#2563eb',bg:'#eff6ff',border:'#bfdbfe',badge:'b-blue'},
   iso14001:{id:'iso14001',label:'ISO 14001:2015',short:'ISO 14001',color:'#0d9488',bg:'#f0fdfa',border:'#99f6e4',badge:'b-teal'},
   iso45001:{id:'iso45001',label:'ISO 45001:2018',short:'ISO 45001',color:'#d97706',bg:'#fffbeb',border:'#fde68a',badge:'b-amber'},
-  internal:{id:'internal',label:'ONEPWS Internal',short:'Internal',color:'#7c3aed',bg:'#f5f3ff',border:'#ddd6fe',badge:'b-purple'},
+  internal:{id:'internal',label:'OnePWS Internal',short:'Internal',color:'#7c3aed',bg:'#f5f3ff',border:'#ddd6fe',badge:'b-purple'},
 };
 
 // ── STANDARD CHECKPOINT LIBRARY: Standard → Dept → Checkpoints ──
@@ -3975,7 +3975,7 @@ function buildChecklist(deptCode,standards){
     }
   });
 
-  // 2) ONEPWS Internal Checkpoints — only if 'internal' standard is selected
+  // 2) OnePWS Internal Checkpoints — only if 'internal' standard is selected
   if(standards.includes('internal')){
   const deptObj=APP.depts.find(d=>d.code===deptCode);
   const deptNameLower=deptObj?deptObj.name.toLowerCase():'';
@@ -4006,7 +4006,7 @@ function buildChecklist(deptCode,standards){
     if(intCps.length>0){
       sections.push({
         id:'sec_internal_'+deptCode,
-        title:'ONEPWS Internal Checkpoints',
+        title:'OnePWS Internal Checkpoints',
         clause:'Internal',
         risk:'Medium',
         stdId:'internal',
@@ -4074,7 +4074,7 @@ function renderPlanning(){
               <span style="width:8px;height:8px;border-radius:50%;background:${s.color};display:inline-block;"></span>${s.label}
             </div>`).join('')}
             <div class="stdchip ${APP.standards.includes('internal')?'sel':''}" id="pstd-internal" onclick="togglePStd('internal')">
-              <span style="width:8px;height:8px;border-radius:50%;background:#7c3aed;display:inline-block;"></span>ONEPWS Internal (${APP.checkpoints.length} checkpoints)
+              <span style="width:8px;height:8px;border-radius:50%;background:#7c3aed;display:inline-block;"></span>OnePWS Internal (${APP.checkpoints.length} checkpoints)
             </div>
           </div>
           <div id="std-hint" class="txs td" style="margin-top:5px;">Select standards to see checklist preview</div>
@@ -4664,7 +4664,7 @@ function downloadCompletionPDF(){
   const{jsPDF}=window.jspdf;const doc=new jsPDF();const pw=doc.internal.pageSize.getWidth();
   doc.setFillColor(192,57,43);doc.rect(0,0,pw,28,'F');
   doc.setTextColor(255);doc.setFontSize(14);doc.setFont('helvetica','bold');
-  doc.text('ONEPWS Pvt. Ltd. — Audit Completion Report',pw/2,12,{align:'center'});
+  doc.text('OnePWS Pvt. Ltd. — Audit Completion Report',pw/2,12,{align:'center'});
   doc.setFontSize(9);doc.setFont('helvetica','normal');
   doc.text(audit.deptName+' | '+audit.auditor+' | '+audit.ref+' | '+new Date().toLocaleDateString(),pw/2,22,{align:'center'});
   doc.setTextColor(30,30,50);doc.setFontSize(10);doc.setFont('helvetica','bold');
@@ -4704,8 +4704,8 @@ function downloadCompletionPDF(){
   });
   doc.setFontSize(7);doc.setTextColor(150);
   const lastY2=doc.internal.pageSize.getHeight()-8;
-  doc.text('ONEPWS Pvt. Ltd. | '+audit.deptName+' | Generated: '+new Date().toLocaleString()+' | Confidential',pw/2,lastY2,{align:'center'});
-  doc.save('ONEPWS_'+audit.deptName.replace(/\s+/g,'_')+'_AuditReport_'+Date.now()+'.pdf');
+  doc.text('OnePWS Pvt. Ltd. | '+audit.deptName+' | Generated: '+new Date().toLocaleString()+' | Confidential',pw/2,lastY2,{align:'center'});
+  doc.save('OnePWS_'+audit.deptName.replace(/\s+/g,'_')+'_AuditReport_'+Date.now()+'.pdf');
   showToast('📄 PDF downloaded!');
 }
 
@@ -4714,7 +4714,7 @@ function downloadCompletionPDF(){
 window.addEventListener('load',function(){renderIcons(document.body);startIconObserver();});
 window.addEventListener('online',function(){_syncStatus='connecting';_updateSyncUI();if(!_syncInitDone)initApiSync();else pollApiSync();});
 window.addEventListener('offline',function(){_syncStatus='offline';_updateSyncUI();});
-console.log('[ONEPWS AuditPro v4.5 MongoDB Sync] Standards engine loaded ✅ — AS9100D/ISO9001/14001/45001 checklist engine active');
+console.log('[OnePWS AuditPro v4.5 MongoDB Sync] Standards engine loaded ✅ — AS9100D/ISO9001/14001/45001 checklist engine active');
 
 </script>
 </body>

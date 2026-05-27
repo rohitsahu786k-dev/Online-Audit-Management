@@ -2,7 +2,7 @@
   "name": "onepws-auditpro",
   "version": "1.0.0",
   "private": true,
-  "description": "ONEPWS AuditPro with MongoDB sync and Gmail SMTP backend.",
+  "description": "OnePWS AuditPro with MongoDB sync and Gmail SMTP backend.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

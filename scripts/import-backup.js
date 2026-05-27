@@ -26,7 +26,7 @@ const BACKUP_TO_SYNC_KEY = {
 
 function findDefaultBackup() {
   return fs.readdirSync(process.cwd())
-    .filter(name => /^ONEPWS_Backup_.*\.json$/i.test(name))
+    .filter(name => /^OnePWS_Backup_.*\.json$/i.test(name))
     .sort()
     .pop();
 }

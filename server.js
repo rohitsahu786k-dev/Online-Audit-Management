@@ -17,7 +17,7 @@ const SMTP_PORT = Number(process.env.SMTP_PORT || 465);
 const SMTP_SECURE = String(process.env.SMTP_SECURE || 'true').toLowerCase() === 'true';
 const SMTP_USER = process.env.SMTP_USER;
 const SMTP_PASS = process.env.SMTP_PASS;
-const SMTP_FROM = process.env.SMTP_FROM || (SMTP_USER ? `ONEPWS AuditPro <${SMTP_USER}>` : undefined);
+const SMTP_FROM = process.env.SMTP_FROM || (SMTP_USER ? `OnePWS AuditPro <${SMTP_USER}>` : undefined);
 
 const SYNC_KEYS = [
   'ap_users',
@@ -423,16 +423,16 @@ app.post('/api/auth/forgot-password', wrapAsync(async (req, res) => {
   await savePasswordResetOtp(collection, user.id, hashOtp(user.id, otp), Date.now() + (15 * 60 * 1000));
 
   const transport = getMailer();
-  const subject = 'ONEPWS AuditPro password reset OTP';
+  const subject = 'OnePWS AuditPro password reset OTP';
   const text = [
     `Hello ${user.name || user.loginId},`,
     '',
-    `Your ONEPWS AuditPro password reset OTP is ${otp}.`,
+    `Your OnePWS AuditPro password reset OTP is ${otp}.`,
     'This OTP is valid for 15 minutes.',
     '',
     'If you did not request this reset, please ignore this email.'
   ].join('\n');
-  const html = `<p>Hello ${user.name || user.loginId},</p><p>Your ONEPWS AuditPro password reset OTP is <strong style="font-size:18px;letter-spacing:3px;">${otp}</strong>.</p><p>This OTP is valid for 15 minutes.</p><p>If you did not request this reset, please ignore this email.</p>`;
+  const html = `<p>Hello ${user.name || user.loginId},</p><p>Your OnePWS AuditPro password reset OTP is <strong style="font-size:18px;letter-spacing:3px;">${otp}</strong>.</p><p>This OTP is valid for 15 minutes.</p><p>If you did not request this reset, please ignore this email.</p>`;
 
   await transport.sendMail({
     from: SMTP_FROM,
