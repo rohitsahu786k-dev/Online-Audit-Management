@@ -156,18 +156,57 @@ function mediaTypeFromUpload(upload) {
   return 'document';
 }
 
-async function appendMediaRecord(media, by) {
-  const collection = await getCollection();
-  const current = await collection.findOne({ key: 'ap_media_library' });
-  const rows = Array.isArray(current && current.value) ? current.value : [];
-  const next = [media].concat(rows.filter(row => row && row.public_id !== media.public_id)).slice(0, 1000);
+async function getMediaRows(collection) {
+  const row = await collection.findOne({ key: 'ap_media_library' });
+  return Array.isArray(row && row.value) ? row.value : [];
+}
+
+async function saveMediaRows(collection, rows, by) {
   const now = new Date();
   await collection.updateOne(
     { key: 'ap_media_library' },
-    { $set: { key: 'ap_media_library', value: next, updatedAt: now, updatedBy: by || 'media-upload' } },
+    { $set: { key: 'ap_media_library', value: rows, updatedAt: now, updatedBy: by || 'media' } },
     { upsert: true }
   );
+  return { updatedAt: now, value: rows };
+}
+
+async function appendMediaRecord(media, by) {
+  const collection = await getCollection();
+  const rows = await getMediaRows(collection);
+  const next = [media].concat(rows.filter(row => row && row.public_id !== media.public_id)).slice(0, 1000);
+  await saveMediaRows(collection, next, by || 'media-upload');
   return next;
+}
+
+async function destroyCloudinaryAsset(publicId, resourceType) {
+  const cfg = getCloudinaryConfig();
+  if (!cfg.cloudName || !cfg.apiKey || !cfg.apiSecret) {
+    const err = new Error('Cloudinary is not configured');
+    err.statusCode = 503;
+    throw err;
+  }
+
+  const timestamp = Math.floor(Date.now() / 1000);
+  const params = { public_id: publicId, timestamp };
+  const form = new FormData();
+  form.append('public_id', publicId);
+  form.append('timestamp', String(timestamp));
+  form.append('api_key', cfg.apiKey);
+  form.append('signature', cloudinarySignature(params, cfg.apiSecret));
+
+  const type = resourceType || 'image';
+  const response = await fetch(`https://api.cloudinary.com/v1_1/${cfg.cloudName}/${type}/destroy`, {
+    method: 'POST',
+    body: form
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.error) {
+    const err = new Error(data.error && data.error.message ? data.error.message : 'Cloudinary delete failed');
+    err.statusCode = response.status || 502;
+    throw err;
+  }
+  return data;
 }
 
 function emailLogKey(log) {
@@ -523,6 +562,8 @@ app.post('/api/media/upload', wrapAsync(async (req, res) => {
   const moduleName = String((req.body && req.body.module) || 'general').trim();
   const category = String((req.body && req.body.category) || '').trim();
   const relatedId = String((req.body && req.body.relatedId) || '').trim();
+  const dept = String((req.body && req.body.dept) || '').trim();
+  const tags = Array.isArray(req.body && req.body.tags) ? req.body.tags.map(String).map(v => v.trim()).filter(Boolean) : [];
   const uploadedBy = String((req.body && req.body.uploadedBy) || 'browser').trim();
 
   if (!file || !/^data:|^https?:\/\//i.test(file)) {
@@ -560,12 +601,68 @@ app.post('/api/media/upload', wrapAsync(async (req, res) => {
     module: moduleName,
     category: category || mediaTypeFromUpload(upload),
     related_id: relatedId,
+    dept,
+    tags,
+    status: 'active',
     uploaded_by: uploadedBy,
-    uploaded_at: new Date().toISOString()
+    uploaded_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    activity_log: [
+      { action: 'uploaded', by: uploadedBy, at: new Date().toISOString(), note: fileName }
+    ],
+    versions: []
   };
 
   await appendMediaRecord(media, uploadedBy);
   res.json({ ok: true, media });
+}));
+
+app.put('/api/media/:id', wrapAsync(async (req, res) => {
+  const collection = await getCollection();
+  const rows = await getMediaRows(collection);
+  const id = String(req.params.id || '');
+  const by = String((req.body && req.body.by) || 'media-update');
+  const patch = (req.body && req.body.patch) || {};
+  const idx = rows.findIndex(row => row && row.id === id);
+  if (idx < 0) return res.status(404).json({ ok: false, error: 'Media record not found' });
+
+  const allowed = ['file_name', 'category', 'tags', 'related_id', 'dept', 'module', 'status', 'secure_url', 'public_id', 'resource_type', 'file_type', 'format', 'bytes', 'versions'];
+  const next = Object.assign({}, rows[idx]);
+  allowed.forEach(key => {
+    if (Object.prototype.hasOwnProperty.call(patch, key)) next[key] = patch[key];
+  });
+  next.updated_at = new Date().toISOString();
+  next.activity_log = Array.isArray(next.activity_log) ? next.activity_log : [];
+  next.activity_log.unshift({ action: String(patch.status || 'updated'), by, at: next.updated_at });
+  rows[idx] = next;
+  await saveMediaRows(collection, rows, by);
+  res.json({ ok: true, media: next, value: rows });
+}));
+
+app.post('/api/media/:id/delete', wrapAsync(async (req, res) => {
+  const collection = await getCollection();
+  const rows = await getMediaRows(collection);
+  const id = String(req.params.id || '');
+  const permanent = Boolean(req.body && req.body.permanent);
+  const by = String((req.body && req.body.by) || 'media-delete');
+  const idx = rows.findIndex(row => row && row.id === id);
+  if (idx < 0) return res.status(404).json({ ok: false, error: 'Media record not found' });
+  const media = rows[idx];
+
+  if (permanent) {
+    if (media.public_id) await destroyCloudinaryAsset(media.public_id, media.resource_type || (media.file_type === 'video' ? 'video' : 'image'));
+    rows.splice(idx, 1);
+  } else {
+    media.status = 'trash';
+    media.deleted_at = new Date().toISOString();
+    media.deleted_by = by;
+    media.activity_log = Array.isArray(media.activity_log) ? media.activity_log : [];
+    media.activity_log.unshift({ action: 'moved_to_trash', by, at: media.deleted_at });
+    rows[idx] = media;
+  }
+
+  await saveMediaRows(collection, rows, by);
+  res.json({ ok: true, value: rows });
 }));
 
 app.post('/api/auth/forgot-password', wrapAsync(async (req, res) => {

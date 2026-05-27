@@ -940,6 +940,9 @@ const APP={
   mdCpPage:1,
   mediaCategoryFilter:'all',
   mediaSearch:'',
+  mediaSort:'latest',
+  mediaView:'list',
+  mediaSelected:[],
   admTab:'users',
   reportDeptFilter:'all',
   reportStatusFilter:'completed',
@@ -2668,14 +2671,21 @@ function addMediaLocal(media){
 function uploadMediaFile(file,dataUrl,type){
   var moduleName=type==='closure'?'closure':(type==='finding'?'finding':'media');
   var relatedId=type==='finding'?(APP.activeFindingQ||''):(type==='closure'?(APP.activeReviewId||''):'');
+  var category=mediaCategoryFor(type,file);
+  var dept=(APP.currentUser&&APP.currentUser.role==='spoc')?APP.currentUser.dept:'';
+  var tags=[];
+  if(type==='finding')tags=['Audit Evidence'];
+  if(type==='closure')tags=['CAPA'];
   return _apiFetch('/api/media/upload',{
     method:'POST',
     body:JSON.stringify({
       fileName:file.name,
       dataUrl:dataUrl,
       module:moduleName,
-      category:mediaCategoryFor(type,file),
+      category:category,
       relatedId:relatedId,
+      dept:dept,
+      tags:tags,
       uploadedBy:(APP.currentUser&&APP.currentUser.loginId)||'browser'
     })
   }).then(function(res){
@@ -2687,15 +2697,28 @@ function handleMediaLibraryUpload(evt){
   var input=evt&&evt.target;
   var files=Array.from(input&&input.files?input.files:[]);
   if(!files.length)return;
+  var done=0,total=files.length;setMediaProgress(0,total);
   files.forEach(function(file){
     showToast('Uploading '+file.name+'...');
     readUploadFile(file,'media',function(obj){
+      done++;setMediaProgress(done,total);
       if(obj.uploadError)return;
       renderMediaBody();
       showToast('Uploaded to Media Library');
     });
   });
   if(input)input.value='';
+}
+function handleMediaDrop(evt){
+  evt.preventDefault();
+  el('media-drop')?.classList.remove('drag');
+  handleMediaLibraryUpload({target:{files:evt.dataTransfer.files,value:''}});
+}
+function setMediaProgress(done,total){
+  var box=el('media-progress');if(!box)return;
+  var pct=total?Math.round(done/total*100):0;
+  box.innerHTML=total?'<div style="height:6px;background:var(--bg3);border-radius:999px;overflow:hidden;"><div style="width:'+pct+'%;height:100%;background:var(--brand);"></div></div><div class="txs td mt1">Uploading... '+pct+'%</div>':'';
+  if(done>=total)setTimeout(function(){var b=el('media-progress');if(b)b.innerHTML='';},1200);
 }
 function checkCloudinaryStatus(){
   showToast('Checking Cloudinary...');
@@ -3356,28 +3379,135 @@ function scopedLearnings(){
   return APP.learnings;
 }
 function canExportGlobalData(){return ['admin','auditor'].includes(APP.currentUser?.role);}
-function mediaRows(){
-  var rows=APP.mediaLibrary||[];
-  var q=(APP.mediaSearch||'').toLowerCase().trim();
-  var cat=APP.mediaCategoryFilter||'all';
-  return rows.filter(function(m){
-    if(cat!=='all'&&String(m.category||m.file_type||'').toLowerCase()!==cat.toLowerCase())return false;
-    if(q&&![m.file_name,m.module,m.category,m.related_id,m.uploaded_by,m.file_type].join(' ').toLowerCase().includes(q))return false;
+function canEditMedia(m){
+  const role=APP.currentUser?.role;
+  if(role==='admin'||role==='auditor')return true;
+  if(role==='spoc')return (m.dept||'')===APP.currentUser?.dept||!m.dept;
+  return false;
+}
+function canDeleteMedia(m){return ['admin','auditor'].includes(APP.currentUser?.role)&&canEditMedia(m);}
+function mediaDeptFromRelated(m){
+  if(m.dept)return m.dept;
+  var rel=String(m.related_id||'');
+  var f=(APP.findings||[]).find(x=>x.id===rel||x.ref===rel||x.auditId===rel||x.auditRef===rel);
+  if(f)return f.dept;
+  var d=(APP.depts||[]).find(x=>rel.indexOf(x.code)>-1);
+  return d?d.code:'';
+}
+function normalizeMediaRecord(m){
+  m=m||{};
+  var next=Object.assign({},m);
+  next.id=next.id||('media_'+(next.public_id||Date.now()).toString().replace(/[^a-z0-9]/gi,'_'));
+  next.file_name=next.file_name||next.name||'File';
+  next.secure_url=next.secure_url||next.url||next.data||'';
+  next.file_type=next.file_type||(/\.pdf(\?|#|$)/i.test(next.secure_url)?'pdf':isImageMedia(next)?'image':/\.(mp4|mov|webm)(\?|#|$)/i.test(next.secure_url)?'video':'document');
+  next.category=next.category||next.file_type||'Documents';
+  next.status=next.status||'active';
+  next.tags=Array.isArray(next.tags)?next.tags:[];
+  next.dept=next.dept||mediaDeptFromRelated(next);
+  next.activity_log=Array.isArray(next.activity_log)?next.activity_log:[];
+  next.versions=Array.isArray(next.versions)?next.versions:[];
+  return next;
+}
+function scopedMediaRows(){
+  const role=APP.currentUser?.role;
+  return (APP.mediaLibrary||[]).map(normalizeMediaRecord).filter(function(m){
+    if(role==='spoc')return (m.dept||'')===APP.currentUser?.dept||!m.dept;
+    if(role==='manager')return !m.dept||managerDeptCodes().includes(m.dept);
     return true;
   });
 }
+function mediaRows(){
+  var rows=scopedMediaRows();
+  var q=(APP.mediaSearch||'').toLowerCase().trim();
+  var cat=APP.mediaCategoryFilter||'all';
+  rows=rows.filter(function(m){
+    if(cat==='Trash'&&m.status!=='trash')return false;
+    if(cat!=='all'&&cat!=='Trash'&&m.status==='trash')return false;
+    if(cat!=='all'&&cat!=='Trash'&&String(m.category||m.file_type||'').toLowerCase()!==cat.toLowerCase())return false;
+    if(q&&![m.file_name,m.module,m.category,m.related_id,m.uploaded_by,m.file_type,m.dept,(m.tags||[]).join(' ')].join(' ').toLowerCase().includes(q))return false;
+    return true;
+  });
+  rows.sort(function(a,b){
+    var s=APP.mediaSort||'latest';
+    if(s==='oldest')return new Date(a.uploaded_at||0)-new Date(b.uploaded_at||0);
+    if(s==='size')return (Number(b.bytes)||0)-(Number(a.bytes)||0);
+    if(s==='name')return String(a.file_name||'').localeCompare(String(b.file_name||''));
+    if(s==='dept')return String(a.dept||'').localeCompare(String(b.dept||''));
+    return new Date(b.uploaded_at||0)-new Date(a.uploaded_at||0);
+  });
+  return rows;
+}
+function mediaSize(bytes){
+  bytes=Number(bytes)||0;
+  if(!bytes)return '-';
+  if(bytes>1048576)return (bytes/1048576).toFixed(1)+' MB';
+  if(bytes>1024)return Math.round(bytes/1024)+' KB';
+  return bytes+' B';
+}
 function mediaPreviewCell(m){
-  if(isImageMedia(m))return '<img src="'+mediaUrl(m)+'" style="width:44px;height:44px;object-fit:cover;border-radius:6px;border:1px solid var(--border);">';
-  return '<div style="width:44px;height:44px;border-radius:6px;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:900;color:var(--text3);border:1px solid var(--border);">'+mediaIcon(m)+'</div>';
+  var url=mediaUrl(m);
+  if(isImageMedia(m))return '<img src="'+sanitize(url)+'" style="width:44px;height:44px;object-fit:cover;border-radius:6px;border:1px solid var(--border);cursor:pointer;" onclick="previewMedia(\''+m.id+'\')">';
+  return '<div onclick="previewMedia(\''+m.id+'\')" style="width:44px;height:44px;border-radius:6px;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:900;color:var(--text3);border:1px solid var(--border);cursor:pointer;">'+mediaIcon(m)+'</div>';
+}
+function selectedMedia(){const ids=new Set(APP.mediaSelected||[]);return scopedMediaRows().filter(m=>ids.has(m.id));}
+function toggleMediaSelect(id,checked){APP.mediaSelected=checked?[...new Set((APP.mediaSelected||[]).concat(id))]:(APP.mediaSelected||[]).filter(x=>x!==id);renderMediaBody();}
+function toggleAllMedia(checked){APP.mediaSelected=checked?mediaRows().map(m=>m.id):[];renderMediaBody();}
+function mediaActionLog(m,action,note){
+  m.activity_log=Array.isArray(m.activity_log)?m.activity_log:[];
+  m.activity_log.unshift({action:action,by:(APP.currentUser&&APP.currentUser.loginId)||'user',at:new Date().toISOString(),note:note||''});
+  return m;
+}
+function persistMediaRows(rows){
+  APP.mediaLibrary=rows;
+  if(APP.currentPage==='media')renderMediaBody();
+}
+function updateMediaLocal(id,patch,action){
+  var rows=(APP.mediaLibrary||[]).map(normalizeMediaRecord);
+  var idx=rows.findIndex(m=>m.id===id);if(idx<0)return null;
+  rows[idx]=mediaActionLog(Object.assign({},rows[idx],patch,{updated_at:new Date().toISOString()}),action||'updated');
+  persistMediaRows(rows);
+  if(_apiReady)_apiFetch('/api/media/'+encodeURIComponent(id),{method:'PUT',body:JSON.stringify({patch:patch,by:(APP.currentUser&&APP.currentUser.loginId)||'media'})}).catch(e=>console.warn('Media update:',e.message));
+  return rows[idx];
+}
+function categoryOptions(selected){
+  const cats=['Audit Reports','NC Evidence','Closure Evidence','Email Attachments','Department Files','Images','Documents','Videos'];
+  return cats.map(c=>`<option value="${c}" ${selected===c?'selected':''}>${c}</option>`).join('');
 }
 function renderMediaLibrary(){
   const cats=['all','Audit Reports','NC Evidence','Closure Evidence','Email Attachments','Images','Documents','Videos','Trash'];
-  return `<div class="card sg">
-    <div class="fb mb2"><div class="ch" style="margin:0"><span class="dot" style="background:var(--brand)"></span>Cloudinary Media Library</div><div class="flex g2u"><button class="btn btn-ghost btn-sm" onclick="checkCloudinaryStatus()">Check Cloudinary</button><button class="btn btn-brand btn-sm" onclick="el('media-upload')?.click()">Upload Files</button><span class="badge b-blue">${(APP.mediaLibrary||[]).length} files</span></div></div>
+  const total=scopedMediaRows().filter(m=>m.status!=='trash').length;
+  const trash=scopedMediaRows().filter(m=>m.status==='trash').length;
+  const bytes=scopedMediaRows().reduce((s,m)=>s+(Number(m.bytes)||0),0);
+  const email=scopedMediaRows().filter(m=>m.category==='Email Attachments').length;
+  return `<div class="grid g4 sg">
+    <div class="stat"><div class="sl">Total Media Files</div><div class="sv">${total}</div></div>
+    <div class="stat"><div class="sl">Storage Usage</div><div class="sv" style="font-size:18px;">${mediaSize(bytes)}</div></div>
+    <div class="stat"><div class="sl">Email Attachments</div><div class="sv">${email}</div></div>
+    <div class="stat"><div class="sl">Trash</div><div class="sv" style="color:var(--amber)">${trash}</div></div>
+  </div>
+  <div class="card sg">
+    <div class="fb mb2"><div class="ch" style="margin:0"><span class="dot" style="background:var(--brand)"></span>Cloudinary Media Library</div><div class="flex g2u"><button class="btn btn-ghost btn-sm" onclick="checkCloudinaryStatus()">Check Cloudinary</button><button class="btn btn-brand btn-sm" onclick="el('media-upload')?.click()">Upload Files</button><span class="badge b-blue">${total} files</span></div></div>
+    <div id="media-drop" class="uparea mb2" onclick="el('media-upload')?.click()" ondragover="event.preventDefault();this.classList.add('drag')" ondragleave="this.classList.remove('drag')" ondrop="handleMediaDrop(event)" style="padding:14px;">
+      <div class="tsm f7">Drop files here or click to upload</div>
+      <div class="txs td mt1">Images, PDFs, videos, Excel and documents</div>
+      <div id="media-progress" class="txs td mt2"></div>
+    </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-      <input placeholder="Search Audit ID, NC, uploader, file type..." value="${sanitize(APP.mediaSearch||'')}" oninput="APP.mediaSearch=this.value;renderMediaBody()" style="min-width:260px;">
-      <select onchange="APP.mediaCategoryFilter=this.value;renderMediaBody()">${cats.map(c=>`<option value="${c}" ${APP.mediaCategoryFilter===c?'selected':''}>${c==='all'?'All Files':c}</option>`).join('')}</select>
+      <input placeholder="Search file, audit ID, NC, dept, uploader, tag..." value="${sanitize(APP.mediaSearch||'')}" oninput="APP.mediaSearch=this.value;renderMediaBody()" style="min-width:260px;">
+      <select onchange="APP.mediaCategoryFilter=this.value;APP.mediaSelected=[];renderMediaBody()">${cats.map(c=>`<option value="${c}" ${APP.mediaCategoryFilter===c?'selected':''}>${c==='all'?'All Files':c}</option>`).join('')}</select>
+      <select onchange="APP.mediaSort=this.value;renderMediaBody()"><option value="latest" ${APP.mediaSort==='latest'?'selected':''}>Latest Upload</option><option value="oldest" ${APP.mediaSort==='oldest'?'selected':''}>Oldest Upload</option><option value="size" ${APP.mediaSort==='size'?'selected':''}>File Size</option><option value="name" ${APP.mediaSort==='name'?'selected':''}>File Name</option><option value="dept" ${APP.mediaSort==='dept'?'selected':''}>Department</option></select>
+      <button class="btn ${APP.mediaView==='grid'?'btn-brand':'btn-ghost'} btn-sm" onclick="APP.mediaView='grid';renderMediaBody()">Grid</button>
+      <button class="btn ${APP.mediaView!=='grid'?'btn-brand':'btn-ghost'} btn-sm" onclick="APP.mediaView='list';renderMediaBody()">List</button>
       <input type="file" id="media-upload" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,video/*" style="display:none" onchange="handleMediaLibraryUpload(event)">
+    </div>
+    <div class="flex g2u fw mt2">
+      <button class="btn btn-ghost btn-sm" onclick="bulkDownloadMedia()">Download Selected</button>
+      <button class="btn btn-ghost btn-sm" onclick="bulkTagMedia()">Tag Selected</button>
+      <button class="btn btn-ghost btn-sm" onclick="bulkMoveMedia()">Move Selected</button>
+      <button class="btn btn-danger btn-sm" onclick="bulkTrashMedia()">Delete Selected</button>
+      <button class="btn btn-ghost btn-sm" onclick="exportMediaIndex()">Export Index</button>
+      <span class="txs td">${(APP.mediaSelected||[]).length} selected</span>
     </div>
   </div>
   <div class="card"><div id="media-body"></div></div>`;
@@ -3385,17 +3515,124 @@ function renderMediaLibrary(){
 function renderMediaBody(){
   const body=el('media-body');if(!body)return;
   const rows=mediaRows();
-  body.innerHTML=`<div class="tw"><table><thead><tr><th>Preview</th><th>File</th><th>Category</th><th>Module</th><th>Related</th><th>Uploaded By</th><th>Date</th><th>Action</th></tr></thead><tbody>${rows.map(m=>`<tr>
-    <td>${mediaPreviewCell(m)}</td>
-    <td class="pr" style="max-width:220px;">${sanitize(m.file_name||'File')}</td>
-    <td>${badge('b-blue',m.category||m.file_type||'File')}</td>
-    <td>${sanitize(m.module||'-')}</td>
-    <td>${sanitize(m.related_id||'-')}</td>
-    <td>${sanitize(m.uploaded_by||'-')}</td>
-    <td>${m.uploaded_at?new Date(m.uploaded_at).toLocaleString():'-'}</td>
-    <td><a class="btn btn-ghost btn-sm" href="${sanitize(mediaUrl(m))}" target="_blank" rel="noopener">Open</a></td>
-  </tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:14px;">No files uploaded yet</td></tr>'}</tbody></table></div>`;
+  const ids=new Set(APP.mediaSelected||[]);
+  if(APP.mediaView==='grid'){
+    body.innerHTML=`<div class="grid g4" style="gap:12px;">${rows.map(m=>`<div class="fcard ${m.status==='trash'?'minor':''}" style="min-height:190px;">
+      <div class="fb mb2"><input type="checkbox" ${ids.has(m.id)?'checked':''} onchange="toggleMediaSelect('${m.id}',this.checked)">${badge(m.status==='trash'?'b-amber':'b-blue',m.category||'File')}</div>
+      <div onclick="previewMedia('${m.id}')" style="height:92px;border-radius:7px;background:var(--bg3);display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer;">${isImageMedia(m)?`<img src="${sanitize(mediaUrl(m))}" style="width:100%;height:100%;object-fit:cover;">`:`<span style="font-weight:900;color:var(--text3);">${mediaIcon(m)}</span>`}</div>
+      <div class="f7 txs mt2" title="${sanitize(m.file_name)}">${sanitize((m.file_name||'File').substring(0,42))}</div>
+      <div class="txx td">${sanitize(m.dept||'All Dept')} · ${mediaSize(m.bytes)}</div>
+      <div class="flex g1u fw mt2">${mediaActions(m)}</div>
+    </div>`).join('')||'<div class="txs td" style="padding:14px;">No files uploaded yet</div>'}</div>`;
+  }else{
+    body.innerHTML=`<div class="tw"><table><thead><tr><th><input type="checkbox" onchange="toggleAllMedia(this.checked)"></th><th>Preview</th><th>File</th><th>Category</th><th>Tags</th><th>Dept</th><th>Related</th><th>Uploaded By</th><th>Size</th><th>Date</th><th>Action</th></tr></thead><tbody>${rows.map(m=>`<tr>
+      <td><input type="checkbox" ${ids.has(m.id)?'checked':''} onchange="toggleMediaSelect('${m.id}',this.checked)"></td>
+      <td>${mediaPreviewCell(m)}</td>
+      <td class="pr" style="max-width:220px;">${sanitize(m.file_name||'File')}</td>
+      <td>${badge(m.status==='trash'?'b-amber':'b-blue',m.status==='trash'?'Trash':(m.category||m.file_type||'File'))}</td>
+      <td>${(m.tags||[]).slice(0,3).map(t=>badge('b-gray',sanitize(t))).join(' ')||'-'}</td>
+      <td>${sanitize(m.dept||'-')}</td>
+      <td>${sanitize(m.related_id||'-')}</td>
+      <td>${sanitize(m.uploaded_by||'-')}</td>
+      <td>${mediaSize(m.bytes)}</td>
+      <td>${m.uploaded_at?new Date(m.uploaded_at).toLocaleString():'-'}</td>
+      <td><div class="flex g1u fw">${mediaActions(m)}</div></td>
+    </tr>`).join('')||'<tr><td colspan="11" style="text-align:center;color:var(--text3);padding:14px;">No files uploaded yet</td></tr>'}</tbody></table></div>`;
+  }
   renderIcons(body);
+}
+function mediaActions(m){
+  const open='<a class="btn btn-ghost btn-sm" href="'+sanitize(mediaUrl(m))+'" target="_blank" rel="noopener" onclick="logMediaActivity(\''+m.id+'\',\'opened\')">Open</a>';
+  const preview='<button class="btn btn-ghost btn-sm" onclick="previewMedia(\''+m.id+'\')">Preview</button>';
+  const download='<a class="btn btn-ghost btn-sm" href="'+sanitize(mediaUrl(m))+'" download="'+sanitize(m.file_name||'file')+'" onclick="logMediaActivity(\''+m.id+'\',\'downloaded\')">Download</a>';
+  if(m.status==='trash')return preview+(canDeleteMedia(m)?'<button class="btn btn-ghost btn-sm" onclick="restoreMedia(\''+m.id+'\')">Restore</button><button class="btn btn-danger btn-sm" onclick="permanentDeleteMedia(\''+m.id+'\')">Delete Forever</button>':'');
+  return preview+open+download+(canEditMedia(m)?'<button class="btn btn-ghost btn-sm" onclick="editMedia(\''+m.id+'\')">Edit</button><button class="btn btn-ghost btn-sm" onclick="replaceMediaPrompt(\''+m.id+'\')">Replace</button>':'')+(canDeleteMedia(m)?'<button class="btn btn-danger btn-sm" onclick="trashMedia(\''+m.id+'\')">Trash</button>':'');
+}
+function mediaById(id){return scopedMediaRows().find(m=>m.id===id)||null;}
+function ensureMediaModal(){
+  var m=el('m-media');
+  if(!m){
+    var div=document.createElement('div');
+    div.className='mbg hidden';div.id='m-media';
+    div.innerHTML='<div class="modal wide"><div class="mh"><span id="media-modal-title">Media</span><button class="btn btn-ghost btn-icon btn-sm" onclick="closeM(\'m-media\')">x</button></div><div id="media-modal-body"></div></div>';
+    document.body.appendChild(div);
+  }
+}
+function previewMedia(id){
+  const m=mediaById(id);if(!m)return;
+  logMediaActivity(id,'viewed');
+  ensureMediaModal();
+  const url=mediaUrl(m), title=el('media-modal-title'), body=el('media-modal-body');
+  title.textContent=m.file_name||'Media Preview';
+  let preview='';
+  if(isImageMedia(m)){
+    preview='<div style="text-align:center;"><img id="media-img-preview" src="'+sanitize(url)+'" style="max-width:100%;max-height:68vh;object-fit:contain;transform:scale(1);transform-origin:center;"></div><div class="flex g2u mt2"><button class="btn btn-ghost btn-sm" onclick="zoomMediaImage(0.2)">Zoom +</button><button class="btn btn-ghost btn-sm" onclick="zoomMediaImage(-0.2)">Zoom -</button><button class="btn btn-ghost btn-sm" onclick="zoomMediaImage(0,true)">Reset</button></div>';
+  }else if((m.file_type==='pdf')||/\.pdf(\?|#|$)/i.test(url)){
+    preview='<iframe src="'+sanitize(url)+'" style="width:100%;height:68vh;border:1px solid var(--border);border-radius:8px;background:#fff;"></iframe>';
+  }else if((m.file_type==='video')||/\.(mp4|mov|webm)(\?|#|$)/i.test(url)){
+    preview='<video controls style="width:100%;max-height:68vh;border-radius:8px;background:#000;"><source src="'+sanitize(url)+'"></video>';
+  }else if(/\.(txt|csv)(\?|#|$)/i.test(url)){
+    preview='<iframe src="'+sanitize(url)+'" style="width:100%;height:60vh;border:1px solid var(--border);border-radius:8px;background:#fff;"></iframe>';
+  }else{
+    preview='<div class="info-box">Document preview is not available in browser for this file type. Use Open or Download.</div>';
+  }
+  body.innerHTML=preview+'<div class="grid g2 mt3" style="gap:10px;"><div><div class="ch"><span class="dot" style="background:var(--brand)"></span>Details</div><div class="txs" style="line-height:2;"><div><b>Category:</b> '+sanitize(m.category||'-')+'</div><div><b>Department:</b> '+sanitize(m.dept||'-')+'</div><div><b>Related:</b> '+sanitize(m.related_id||'-')+'</div><div><b>Uploaded:</b> '+(m.uploaded_at?new Date(m.uploaded_at).toLocaleString():'-')+'</div><div><b>Size:</b> '+mediaSize(m.bytes)+'</div><div><b>Tags:</b> '+sanitize((m.tags||[]).join(', ')||'-')+'</div></div></div><div><div class="ch"><span class="dot" style="background:var(--teal)"></span>Activity Log</div><div style="max-height:150px;overflow:auto;">'+((m.activity_log||[]).slice(0,8).map(l=>'<div class="txs td" style="border-bottom:1px solid var(--bg3);padding:4px 0;"><b>'+sanitize(l.action)+'</b> by '+sanitize(l.by||'-')+'<br>'+sanitize(l.at?new Date(l.at).toLocaleString():'')+'</div>').join('')||'<div class="txs td">No activity yet</div>')+'</div></div></div><div class="flex g2u mt3"><a class="btn btn-brand btn-sm" href="'+sanitize(url)+'" target="_blank" rel="noopener">Open</a><a class="btn btn-ghost btn-sm" href="'+sanitize(url)+'" download="'+sanitize(m.file_name||'file')+'">Download</a></div>';
+  openM('m-media');
+}
+function zoomMediaImage(delta,reset){
+  var img=el('media-img-preview');if(!img)return;
+  var cur=Number(img.dataset.zoom||1);
+  cur=reset?1:Math.max(0.4,Math.min(4,cur+delta));
+  img.dataset.zoom=cur;img.style.transform='scale('+cur+')';
+}
+function editMedia(id){
+  const m=mediaById(id);if(!m||!canEditMedia(m))return;
+  ensureMediaModal();
+  el('media-modal-title').textContent='Edit Media';
+  el('media-modal-body').innerHTML=`<div style="display:flex;flex-direction:column;gap:9px;">
+    <div><label class="lbl">File Name</label><input id="med-name" value="${sanitize(m.file_name||'')}"></div>
+    <div class="grid g2" style="gap:9px;"><div><label class="lbl">Category</label><select id="med-cat">${categoryOptions(m.category)}</select></div><div><label class="lbl">Department</label><select id="med-dept"><option value="">All</option>${APP.depts.map(d=>`<option value="${d.code}" ${m.dept===d.code?'selected':''}>${d.name}</option>`).join('')}</select></div></div>
+    <div class="grid g2" style="gap:9px;"><div><label class="lbl">Linked Audit/NC</label><input id="med-related" value="${sanitize(m.related_id||'')}"></div><div><label class="lbl">Folder/Module</label><input id="med-module" value="${sanitize(m.module||'media')}"></div></div>
+    <div><label class="lbl">Tags</label><input id="med-tags" value="${sanitize((m.tags||[]).join(', '))}" placeholder="Critical NC, CAPA, Approved"></div>
+    <div class="flex g2u"><button class="btn btn-brand" onclick="saveMediaEdit('${m.id}')">Save Changes</button><button class="btn btn-ghost" onclick="closeM('m-media')">Cancel</button></div>
+  </div>`;
+  openM('m-media');
+}
+function saveMediaEdit(id){
+  const patch={file_name:el('med-name').value.trim()||'File',category:el('med-cat').value,dept:el('med-dept').value,related_id:el('med-related').value.trim(),module:el('med-module').value.trim()||'media',tags:el('med-tags').value.split(/[;,]/).map(x=>x.trim()).filter(Boolean)};
+  updateMediaLocal(id,patch,'updated');
+  closeM('m-media');showToast('Media updated');
+}
+function replaceMediaPrompt(id){
+  const m=mediaById(id);if(!m||!canEditMedia(m))return;
+  var input=document.createElement('input');
+  input.type='file';input.accept='image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,video/*';
+  input.onchange=function(evt){const file=evt.target.files[0];if(!file)return;readUploadFile(file,'media',function(obj){if(obj.uploadError)return;const old=mediaById(id);const versions=(old.versions||[]).concat([{secure_url:old.secure_url,public_id:old.public_id,replaced_at:new Date().toISOString()}]);updateMediaLocal(id,{file_name:file.name,secure_url:obj.secure_url||obj.data,public_id:obj.public_id,resource_type:obj.resource_type,file_type:obj.file_type,format:obj.format,bytes:obj.bytes,versions:versions},'replaced');showToast('Media replaced');});};
+  input.click();
+}
+function logMediaActivity(id,action){
+  var rows=(APP.mediaLibrary||[]).map(normalizeMediaRecord),idx=rows.findIndex(m=>m.id===id);if(idx<0)return;
+  rows[idx]=mediaActionLog(rows[idx],action);APP.mediaLibrary=rows;
+}
+function trashMedia(id){const m=mediaById(id);if(!m||!canDeleteMedia(m))return;confirmAct('Move this file to Trash?',function(){updateMediaLocal(id,{status:'trash',deleted_at:new Date().toISOString(),deleted_by:(APP.currentUser&&APP.currentUser.loginId)||'user'},'moved_to_trash');showToast('Moved to Trash');});}
+function restoreMedia(id){const m=mediaById(id);if(!m||!canDeleteMedia(m))return;updateMediaLocal(id,{status:'active',deleted_at:'',deleted_by:''},'restored');showToast('Restored');}
+function permanentDeleteMedia(id){
+  const m=mediaById(id);if(!m||!canDeleteMedia(m))return;
+  confirmAct('Permanently delete this file from Cloudinary and Media Library?',function(){
+    _apiFetch('/api/media/'+encodeURIComponent(id)+'/delete',{method:'POST',body:JSON.stringify({permanent:true,by:(APP.currentUser&&APP.currentUser.loginId)||'media'})}).then(function(data){
+      if(Array.isArray(data.value))APP.mediaLibrary=data.value;else APP.mediaLibrary=(APP.mediaLibrary||[]).filter(x=>x.id!==id);
+      APP.mediaSelected=(APP.mediaSelected||[]).filter(x=>x!==id);renderMediaBody();showToast('Permanently deleted');
+    }).catch(function(e){showToast('Delete failed: '+e.message);});
+  });
+}
+function bulkDownloadMedia(){const rows=selectedMedia();if(!rows.length){showToast('Select files first');return;}rows.forEach(m=>window.open(mediaUrl(m),'_blank'));showToast('Opened '+rows.length+' download link(s)');}
+function bulkTagMedia(){const rows=selectedMedia();if(!rows.length){showToast('Select files first');return;}const tag=prompt('Add tag to selected files');if(!tag)return;rows.forEach(m=>updateMediaLocal(m.id,{tags:[...new Set((m.tags||[]).concat(tag.trim()))]},'tagged'));showToast('Tag added');}
+function bulkMoveMedia(){const rows=selectedMedia();if(!rows.length){showToast('Select files first');return;}const cat=prompt('Move selected files to category/folder','Department Files');if(!cat)return;rows.forEach(m=>updateMediaLocal(m.id,{category:cat.trim(),module:cat.trim().toLowerCase().replace(/[^a-z0-9]+/g,'-')},'moved'));showToast('Moved selected files');}
+function bulkTrashMedia(){const rows=selectedMedia().filter(canDeleteMedia);if(!rows.length){showToast('Select deletable files first');return;}confirmAct('Move selected files to Trash?',function(){rows.forEach(m=>updateMediaLocal(m.id,{status:'trash',deleted_at:new Date().toISOString()},'moved_to_trash'));APP.mediaSelected=[];showToast('Moved selected files to Trash');});}
+function exportMediaIndex(){
+  const rows=mediaRows().map(m=>({File:m.file_name,Category:m.category,Dept:m.dept,Related:m.related_id,UploadedBy:m.uploaded_by,UploadedAt:m.uploaded_at,Size:m.bytes,Url:m.secure_url,Tags:(m.tags||[]).join(', ')}));
+  if(window.XLSX){const ws=XLSX.utils.json_to_sheet(rows);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Media');XLSX.writeFile(wb,'OnePWS_Media_Index_'+Date.now()+'.xlsx');}
+  else{const blob=new Blob([JSON.stringify(rows,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='OnePWS_Media_Index.json';a.click();URL.revokeObjectURL(a.href);}
 }
 
 // ═══════════════════════════════════════════════════
