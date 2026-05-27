@@ -467,6 +467,51 @@ app.post('/api/email/log', wrapAsync(async (req, res) => {
   res.json({ ok: true, count: value.length, value });
 }));
 
+app.get('/api/media/status', wrapAsync(async (_req, res) => {
+  const cfg = getCloudinaryConfig();
+  if (!cfg.cloudName || !cfg.apiKey || !cfg.apiSecret) {
+    return res.status(503).json({ ok: false, connected: false, error: 'Cloudinary is not configured' });
+  }
+
+  const timestamp = Math.floor(Date.now() / 1000);
+  const params = {
+    folder: 'onepws-auditpro/health',
+    overwrite: 'true',
+    public_id: 'connection-test',
+    timestamp
+  };
+  const form = new FormData();
+  form.append('file', 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==');
+  form.append('folder', params.folder);
+  form.append('overwrite', params.overwrite);
+  form.append('public_id', params.public_id);
+  form.append('timestamp', String(timestamp));
+  form.append('api_key', cfg.apiKey);
+  form.append('signature', cloudinarySignature(params, cfg.apiSecret));
+
+  const response = await fetch(`https://api.cloudinary.com/v1_1/${cfg.cloudName}/auto/upload`, {
+    method: 'POST',
+    body: form
+  });
+  const upload = await response.json().catch(() => ({}));
+  if (!response.ok || upload.error) {
+    return res.status(response.status || 502).json({
+      ok: false,
+      connected: false,
+      cloudName: cfg.cloudName,
+      error: upload.error && upload.error.message ? upload.error.message : 'Cloudinary connectivity check failed'
+    });
+  }
+
+  res.json({
+    ok: true,
+    connected: true,
+    cloudName: cfg.cloudName,
+    publicId: upload.public_id,
+    secureUrl: upload.secure_url
+  });
+}));
+
 app.post('/api/media/upload', wrapAsync(async (req, res) => {
   const cfg = getCloudinaryConfig();
   if (!cfg.cloudName || !cfg.apiKey || !cfg.apiSecret) {

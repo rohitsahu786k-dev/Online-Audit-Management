@@ -2666,8 +2666,8 @@ function addMediaLocal(media){
   APP.mediaLibrary=rows;
 }
 function uploadMediaFile(file,dataUrl,type){
-  var moduleName=type==='closure'?'closure':'finding';
-  var relatedId=type==='finding'?(APP.activeFindingQ||''):(APP.activeReviewId||'');
+  var moduleName=type==='closure'?'closure':(type==='finding'?'finding':'media');
+  var relatedId=type==='finding'?(APP.activeFindingQ||''):(type==='closure'?(APP.activeReviewId||''):'');
   return _apiFetch('/api/media/upload',{
     method:'POST',
     body:JSON.stringify({
@@ -2681,6 +2681,30 @@ function uploadMediaFile(file,dataUrl,type){
   }).then(function(res){
     addMediaLocal(res.media);
     return Object.assign({name:file.name,data:res.media.secure_url},res.media);
+  });
+}
+function handleMediaLibraryUpload(evt){
+  var input=evt&&evt.target;
+  var files=Array.from(input&&input.files?input.files:[]);
+  if(!files.length)return;
+  files.forEach(function(file){
+    showToast('Uploading '+file.name+'...');
+    readUploadFile(file,'media',function(obj){
+      if(obj.uploadError)return;
+      renderMediaBody();
+      showToast('Uploaded to Media Library');
+    });
+  });
+  if(input)input.value='';
+}
+function checkCloudinaryStatus(){
+  showToast('Checking Cloudinary...');
+  return _apiFetch('/api/media/status').then(function(data){
+    showToast(data.connected?'Cloudinary connected: '+data.cloudName:'Cloudinary not connected');
+    return data;
+  }).catch(function(e){
+    showToast('Cloudinary check failed: '+e.message);
+    throw e;
   });
 }
 function readUploadFile(file,type,done){
@@ -3349,10 +3373,11 @@ function mediaPreviewCell(m){
 function renderMediaLibrary(){
   const cats=['all','Audit Reports','NC Evidence','Closure Evidence','Email Attachments','Images','Documents','Videos','Trash'];
   return `<div class="card sg">
-    <div class="fb mb2"><div class="ch" style="margin:0"><span class="dot" style="background:var(--brand)"></span>Cloudinary Media Library</div><span class="badge b-blue">${(APP.mediaLibrary||[]).length} files</span></div>
+    <div class="fb mb2"><div class="ch" style="margin:0"><span class="dot" style="background:var(--brand)"></span>Cloudinary Media Library</div><div class="flex g2u"><button class="btn btn-ghost btn-sm" onclick="checkCloudinaryStatus()">Check Cloudinary</button><button class="btn btn-brand btn-sm" onclick="el('media-upload')?.click()">Upload Files</button><span class="badge b-blue">${(APP.mediaLibrary||[]).length} files</span></div></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
       <input placeholder="Search Audit ID, NC, uploader, file type..." value="${sanitize(APP.mediaSearch||'')}" oninput="APP.mediaSearch=this.value;renderMediaBody()" style="min-width:260px;">
       <select onchange="APP.mediaCategoryFilter=this.value;renderMediaBody()">${cats.map(c=>`<option value="${c}" ${APP.mediaCategoryFilter===c?'selected':''}>${c==='all'?'All Files':c}</option>`).join('')}</select>
+      <input type="file" id="media-upload" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,video/*" style="display:none" onchange="handleMediaLibraryUpload(event)">
     </div>
   </div>
   <div class="card"><div id="media-body"></div></div>`;
