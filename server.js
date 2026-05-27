@@ -119,24 +119,46 @@ function parseRecipients(input) {
   return [];
 }
 
+function cleanEnvValue(value) {
+  return String(value || '').trim().replace(/^['"]|['"]$/g, '');
+}
+
 function getCloudinaryConfig() {
-  const url = process.env.CLOUDINARY_URL || '';
+  const url = cleanEnvValue(process.env.CLOUDINARY_URL);
   if (url) {
-    const match = url.match(/^cloudinary:\/\/([^:]+):([^@]+)@(.+)$/);
-    if (match) {
-      return {
-        apiKey: decodeURIComponent(match[1]),
-        apiSecret: decodeURIComponent(match[2]),
-        cloudName: decodeURIComponent(match[3])
-      };
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol === 'cloudinary:') {
+        const cloudName = parsed.hostname || parsed.pathname.replace(/^\/+/, '');
+        return {
+          apiKey: decodeURIComponent(parsed.username || ''),
+          apiSecret: decodeURIComponent(parsed.password || ''),
+          cloudName: decodeURIComponent(cloudName || '')
+        };
+      }
+    } catch (_err) {
+      const match = url.match(/^cloudinary:\/\/([^:]+):([^@]+)@(.+)$/);
+      if (match) {
+        return {
+          apiKey: decodeURIComponent(match[1]),
+          apiSecret: decodeURIComponent(match[2]),
+          cloudName: decodeURIComponent(match[3].replace(/[/?#].*$/, ''))
+        };
+      }
     }
   }
 
   return {
-    cloudName: process.env.CLOUDINARY_CLOUD_NAME,
-    apiKey: process.env.CLOUDINARY_API_KEY,
-    apiSecret: process.env.CLOUDINARY_API_SECRET
+    cloudName: cleanEnvValue(process.env.CLOUDINARY_CLOUD_NAME),
+    apiKey: cleanEnvValue(process.env.CLOUDINARY_API_KEY),
+    apiSecret: cleanEnvValue(process.env.CLOUDINARY_API_SECRET)
   };
+}
+
+function getCloudinaryEndpoint(cfg, resourceType, action) {
+  const cloudName = encodeURIComponent(cfg.cloudName);
+  const type = encodeURIComponent(resourceType);
+  return `https://api.cloudinary.com/v1_1/${cloudName}/${type}/${action}`;
 }
 
 function cloudinarySignature(params, secret) {
@@ -196,7 +218,7 @@ async function destroyCloudinaryAsset(publicId, resourceType) {
   form.append('signature', cloudinarySignature(params, cfg.apiSecret));
 
   const type = resourceType || 'image';
-  const response = await fetch(`https://api.cloudinary.com/v1_1/${cfg.cloudName}/${type}/destroy`, {
+  const response = await fetch(getCloudinaryEndpoint(cfg, type, 'destroy'), {
     method: 'POST',
     body: form
   });
@@ -528,7 +550,7 @@ app.get('/api/media/status', wrapAsync(async (_req, res) => {
   form.append('api_key', cfg.apiKey);
   form.append('signature', cloudinarySignature(params, cfg.apiSecret));
 
-  const response = await fetch(`https://api.cloudinary.com/v1_1/${cfg.cloudName}/auto/upload`, {
+  const response = await fetch(getCloudinaryEndpoint(cfg, 'auto', 'upload'), {
     method: 'POST',
     body: form
   });
@@ -580,7 +602,7 @@ app.post('/api/media/upload', wrapAsync(async (req, res) => {
   form.append('api_key', cfg.apiKey);
   form.append('signature', cloudinarySignature(signed, cfg.apiSecret));
 
-  const response = await fetch(`https://api.cloudinary.com/v1_1/${cfg.cloudName}/auto/upload`, {
+  const response = await fetch(getCloudinaryEndpoint(cfg, 'auto', 'upload'), {
     method: 'POST',
     body: form
   });
