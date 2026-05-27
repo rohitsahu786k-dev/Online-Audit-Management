@@ -3,7 +3,7 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 
-const APP_URL = process.env.APP_URL || 'http://localhost:3000';
+const APP_URL = process.env.APP_URL;
 const BROWSER_CANDIDATES = [
   process.env.PLAYWRIGHT_CHROME,
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
@@ -11,6 +11,10 @@ const BROWSER_CANDIDATES = [
   'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
   'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
 ].filter(Boolean);
+
+if (!APP_URL) {
+  throw new Error('APP_URL is required. Set it to the deployed app URL or the local dev server URL before running smoke tests.');
+}
 
 async function api(path, opts) {
   const res = await fetch(`${APP_URL}${path}`, opts);

@@ -504,7 +504,7 @@ process.on('SIGTERM', shutdown);
 
 if (require.main === module) {
   app.listen(PORT, () => {
-    console.log(`[AuditPro] Server running at http://localhost:${PORT}`);
+    console.log(`[AuditPro] Server running on port ${PORT}`);
   });
 }
 

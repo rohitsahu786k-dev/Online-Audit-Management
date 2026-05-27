@@ -532,7 +532,7 @@ input:focus,select:focus,textarea:focus{border-color:var(--brand);background:var
     <div class="mb2"><label class="lbl">Login ID or Email</label><input id="fp-id" autocomplete="username" placeholder="Enter your login ID or email"></div>
     <button class="btn btn-primary wf mb2" id="fp-send" onclick="requestPasswordOtp()"><i data-lucide="mail" class="ico-svg"></i>Send OTP</button>
     <div id="fp-step2" class="hidden" style="border-top:1px solid var(--border);padding-top:12px;margin-top:12px;">
-      <div class="info-box mb2">Enter the OTP sent to your registered email. The email contains only an OTP, no localhost link.</div>
+      <div class="info-box mb2">Enter the OTP sent to your registered email. The email contains only an OTP, no development link.</div>
       <div class="grid g2 mb2" style="gap:9px;"><div><label class="lbl">OTP</label><input id="fp-otp" inputmode="numeric" maxlength="6" placeholder="6 digit OTP"></div><div><label class="lbl">New Password</label><input id="fp-pw" type="password" placeholder="Min 6 chars"></div></div>
       <div class="mb2"><label class="lbl">Confirm Password</label><input id="fp-pw2" type="password"></div>
       <button class="btn btn-brand wf" id="fp-reset" onclick="resetForgotPassword()"><i data-lucide="shield-check" class="ico-svg"></i>Reset Password</button>
@@ -620,6 +620,7 @@ input:focus,select:focus,textarea:focus{border-color:var(--brand);background:var
 const LOGO_SRC = 'assets/onepws-dark-logo-scaled.png';
 const OCP_PDF_SRC = 'assets/OCP_Manual_v4.3_Complete.pdf';
 const REQUIRED_CC_EMAIL = 'process@onepws.com';
+const PUBLIC_APP_URL = 'https://audit.onepws.com';
 
 // ═══════════════════════════════════════════════════
 // LOCALSTORAGE HELPERS
@@ -1683,7 +1684,11 @@ function addNotif(type,title,body,link,roles=['admin']){
   APP.notifications=ns;updateNotifBadge();
 }
 function appDashboardUrl(){
-  return (location.origin||'').replace(/\/$/,'')+'/#dashboard';
+  const origin=(location.origin||'').replace(/\/$/,'');
+  const host=(location.hostname||'').toLowerCase();
+  const isLocalHost=host===['local','host'].join('')||host==='[::1]'||/^127\./.test(host)||/^0\.0\.0\.0$/.test(host);
+  const base=(!origin||isLocalHost)?PUBLIC_APP_URL:origin;
+  return base.replace(/\/$/,'')+'/#dashboard';
 }
 function requiredCcEmails(toList){
   const toSet=new Set((toList||[]).map(x=>String(x).toLowerCase()));
