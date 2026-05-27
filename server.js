@@ -118,6 +118,37 @@ function parseRecipients(input) {
   return [];
 }
 
+function emailLogKey(log) {
+  if (!log || typeof log !== 'object') return '';
+  if (log.id) return String(log.id);
+  return [
+    log.type || '',
+    log.to || '',
+    log.cc || '',
+    log.subject || '',
+    log.status || '',
+    log.sentAt || ''
+  ].join('|');
+}
+
+function mergeEmailLogs(existing, incoming, clearedAt) {
+  const clearTime = clearedAt ? new Date(clearedAt).getTime() : 0;
+  const seen = new Set();
+  return []
+    .concat(Array.isArray(incoming) ? incoming : [], Array.isArray(existing) ? existing : [])
+    .filter(log => {
+      if (!log || typeof log !== 'object') return false;
+      const sentTime = log.sentAt ? new Date(log.sentAt).getTime() : Date.now();
+      if (clearTime && sentTime <= clearTime) return false;
+      const key = emailLogKey(log);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => new Date(b.sentAt || 0) - new Date(a.sentAt || 0))
+    .slice(0, 500);
+}
+
 function cleanIdentity(input) {
   return String(input || '').trim().toLowerCase();
 }
@@ -236,12 +267,41 @@ app.put('/api/sync/:key', wrapAsync(async (req, res) => {
 
   const collection = await getCollection();
   const now = new Date();
+  const incomingValue = req.body && Object.prototype.hasOwnProperty.call(req.body, 'value') ? req.body.value : null;
+
+  if (key === 'ap_email_logs') {
+    const current = await collection.findOne({ key });
+    const replace = Boolean(req.body && req.body.replace);
+    const clearedAt = replace && Array.isArray(incomingValue) && incomingValue.length === 0
+      ? now
+      : (current && current.clearedAt);
+    const value = replace
+      ? (Array.isArray(incomingValue) ? incomingValue : [])
+      : mergeEmailLogs(current && current.value, incomingValue, clearedAt);
+
+    await collection.updateOne(
+      { key },
+      {
+        $set: {
+          key,
+          value,
+          updatedAt: now,
+          updatedBy: (req.body && req.body.by) || 'browser',
+          clearedAt: clearedAt || null
+        }
+      },
+      { upsert: true }
+    );
+
+    return res.json({ ok: true, key, updatedAt: now, count: value.length });
+  }
+
   await collection.updateOne(
     { key },
     {
       $set: {
         key,
-        value: req.body && Object.prototype.hasOwnProperty.call(req.body, 'value') ? req.body.value : null,
+        value: incomingValue,
         updatedAt: now,
         updatedBy: (req.body && req.body.by) || 'browser'
       }
@@ -321,6 +381,32 @@ app.post('/api/email', wrapAsync(async (req, res) => {
   });
 
   res.json({ ok: true, messageId: info.messageId, accepted: info.accepted });
+}));
+
+app.post('/api/email/log', wrapAsync(async (req, res) => {
+  const log = req.body && req.body.log;
+  if (!log || typeof log !== 'object') return res.status(400).json({ ok: false, error: 'Email log is required' });
+
+  const collection = await getCollection();
+  const current = await collection.findOne({ key: 'ap_email_logs' });
+  const now = new Date();
+  const value = mergeEmailLogs(current && current.value, [log], current && current.clearedAt);
+
+  await collection.updateOne(
+    { key: 'ap_email_logs' },
+    {
+      $set: {
+        key: 'ap_email_logs',
+        value,
+        updatedAt: now,
+        updatedBy: (req.body && req.body.by) || 'email-log',
+        clearedAt: current && current.clearedAt ? current.clearedAt : null
+      }
+    },
+    { upsert: true }
+  );
+
+  res.json({ ok: true, count: value.length, value });
 }));
 
 app.post('/api/auth/forgot-password', wrapAsync(async (req, res) => {
