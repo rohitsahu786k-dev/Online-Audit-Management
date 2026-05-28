@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -2113,6 +2113,7 @@ function renderDashboard(){
   });
   const sorted=[...deptScores].filter(d=>d.score!==null).sort((a,b)=>b.score-a.score);
   const top5=sorted.slice(0,5);const bot5=sorted.slice(-5).reverse();
+  const activeDeptScores = deptScores.filter(d => d.score !== null || d.findings > 0);
   return`
   <div class="grid g4 sg">
     <div class="stat"><div class="sl">Audit Score</div><div class="sv" style="color:var(--${overallAuditScore===null?'text3':auditScoreColor(overallAuditScore)})">${overallAuditScore===null?'N/A':overallAuditScore+'%'}</div><div class="sd">Latest frozen audit avg.</div></div>
@@ -2126,7 +2127,7 @@ function renderDashboard(){
       <div class="tw"><table>
         <thead><tr><th>Department</th><th>Total</th><th style="color:var(--red)">Open</th><th style="color:var(--amber)">In Process</th><th style="color:var(--green)">Closed</th><th>Audit Score</th><th>Closure %</th><th>Status</th><th></th></tr></thead>
         <tbody>
-          ${deptScores.map(d=>`<tr>
+          ${activeDeptScores.map(d=>`<tr>
             <td class="pr">${d.name}</td>
             <td style="font-weight:800">${d.findings}</td>
             <td style="color:var(--red);font-weight:${d.open?800:400}">${d.open||'—'}</td>
@@ -2137,12 +2138,12 @@ function renderDashboard(){
             <td title="${d.score===null?'No audit has been conducted yet':''}">${d.score===null?badge('b-gray','Not Audited'):badge(auditScoreBadge(d.score),auditScoreStatus(d.score))}</td>
             <td><button class="btn btn-ghost btn-sm" onclick="APP.findingsDeptFilter='${d.code}';navigate('findings')">→</button></td>
           </tr>`).join('')}
-          ${deptScores.length?`<tr style="border-top:2px solid var(--border);font-weight:900;background:var(--bg3);">
+          ${activeDeptScores.length?`<tr style="border-top:2px solid var(--border);font-weight:900;background:var(--bg3);">
             <td>TOTAL</td>
-            <td>${deptScores.reduce((s,d)=>s+d.findings,0)}</td>
-            <td style="color:var(--red)">${deptScores.reduce((s,d)=>s+d.open,0)}</td>
-            <td style="color:var(--amber)">${deptScores.reduce((s,d)=>s+d.inprog,0)}</td>
-            <td style="color:var(--green)">${deptScores.reduce((s,d)=>s+d.closed,0)}</td>
+            <td>${activeDeptScores.reduce((s,d)=>s+d.findings,0)}</td>
+            <td style="color:var(--red)">${activeDeptScores.reduce((s,d)=>s+d.open,0)}</td>
+            <td style="color:var(--amber)">${activeDeptScores.reduce((s,d)=>s+d.inprog,0)}</td>
+            <td style="color:var(--green)">${activeDeptScores.reduce((s,d)=>s+d.closed,0)}</td>
             <td style="color:var(--brand)">${overallAuditScore===null?'N/A':overallAuditScore+'%'}</td>
             <td style="color:var(--brand)">${closureRate(F)}%</td>
             <td colspan="2"></td>
