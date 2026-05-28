@@ -1451,6 +1451,21 @@ function latestDeptAuditScoreAt(deptCode,monthEnd){
   if(!audits.length)return null;
   return frozenAuditScore(audits[audits.length-1]);
 }
+function latestDeptAuditInMonth(deptCode,yr,monthIndex){
+  var start=new Date(yr,monthIndex,1);
+  var end=new Date(yr,monthIndex+1,0,23,59,59,999);
+  var audits=completedAuditsSorted(deptCode).filter(function(a){
+    var d=parseAuditDate(a.submittedAt||a.date,yr);
+    return d&&d>=start&&d<=end;
+  });
+  return audits.length?audits[audits.length-1]:null;
+}
+function deptHasAuditInYear(deptCode,yr){
+  return completedAuditsSorted(deptCode).some(function(a){
+    var d=parseAuditDate(a.submittedAt||a.date,yr);
+    return d&&d.getFullYear()===yr;
+  });
+}
 function orgLatestAuditScore(depts){
   var scores=(depts||APP.depts).map(function(d){var s=latestDeptAuditScore(d.code);return s&&typeof s.score==='number'?s.score:null;}).filter(function(v){return v!==null;});
   if(!scores.length)return null;
@@ -2321,18 +2336,20 @@ function renderAnalytics(){
     var data=[];
     for(var m=0;m<12;m++){
       var monthEnd=new Date(yr,m+1,0,23,59,59,999);
-      var mFinds=trendFindings.filter(function(f){
+      var auditThisMonth=latestDeptAuditInMonth(deptCode,yr,m);
+      var asOfDate=auditThisMonth?monthEnd:null;
+      var mFinds=auditThisMonth?trendFindings.filter(function(f){
         if(deptCode&&f.dept!==deptCode)return false;
         var raised=findingRaisedDate(f,yr);
-        return raised&&raised<=monthEnd;
-      });
-      var cl=mFinds.filter(function(f){
+        return raised&&raised<=asOfDate;
+      }):[];
+      var cl=auditThisMonth?mFinds.filter(function(f){
         if(f.status!=='closed')return false;
         var closedAt=findingClosedDate(f,yr);
-        return !closedAt||closedAt<=monthEnd;
-      }).length;
-      var cr=cumulativeClosureRateAt(trendFindings,deptCode,monthEnd,yr);
-      var as=latestDeptAuditScoreAt(deptCode,monthEnd);
+        return !closedAt||closedAt<=asOfDate;
+      }).length:0;
+      var cr=auditThisMonth?cumulativeClosureRateAt(trendFindings,deptCode,asOfDate,yr):null;
+      var as=auditThisMonth?frozenAuditScore(auditThisMonth):null;
       data.push({month:months[m],total:mFinds.length,closed:cl,cr:cr,auditScore:as});
     }
     return data;
@@ -2340,7 +2357,7 @@ function renderAnalytics(){
   
   // Build closure rate trend table (month-over-month change)
   function buildClosureTrend(){
-    var rows=depts.filter(function(d){return trendFindings.some(function(f){return f.dept===d.code;});}).map(function(d){
+    var rows=depts.filter(function(d){return deptHasAuditInYear(d.code,yr);}).map(function(d){
       var md=getMonthlyData(d.code);
       var cells='';
       for(var m=0;m<12;m++){
@@ -2360,13 +2377,13 @@ function renderAnalytics(){
       }
       return '<tr><td class="pr" style="white-space:nowrap;">'+d.name+'</td>'+cells+'</tr>';
     });
-    if(!rows.length)return '<div class="txs td">No closure data — findings will populate this view after audits.</div>';
+    if(!rows.length)return '<div class="txs td">No submitted audits yet — monthly closure rates will appear after audit submission.</div>';
     return '<div class="tw"><table style="font-size:11px;"><thead><tr><th>Department</th>'+months.map(function(m){return '<th style="text-align:center;">'+m+'</th>';}).join('')+'</tr></thead><tbody>'+rows.join('')+'</tbody></table></div>';
   }
   
   // Build monthly audit score table
   function buildMonthlyScoreTable(){
-    var rows=depts.filter(function(d){return latestDeptAuditScore(d.code);}).map(function(d){
+    var rows=depts.filter(function(d){return deptHasAuditInYear(d.code,yr);}).map(function(d){
       var md=getMonthlyData(d.code);
       var cells='';
       for(var m=0;m<12;m++){
@@ -2411,11 +2428,11 @@ function renderAnalytics(){
     </div>
   </div>
   <div class="card sg">
-    <div class="ch fb"><div class="flex g2u"><span class="dot" style="background:var(--teal)"></span>Monthly Closure Rate Trend — ${yr}</div><div class="txs td">Closed till month-end ÷ findings raised till month-end</div></div>
+    <div class="ch fb"><div class="flex g2u"><span class="dot" style="background:var(--teal)"></span>Monthly Closure Rate Trend — ${yr}</div><div class="txs td">Only audit months · closed till month-end ÷ findings raised till month-end</div></div>
     ${buildClosureTrend()}
   </div>
   <div class="card sg">
-    <div class="ch fb"><div class="flex g2u"><span class="dot" style="background:var(--brand)"></span>Monthly Audit Score — ${yr}</div><div class="txs td">Score = 100 − Weighted Severity Deductions</div></div>
+    <div class="ch fb"><div class="flex g2u"><span class="dot" style="background:var(--brand)"></span>Monthly Audit Score — ${yr}</div><div class="txs td">Only audit months · score = 100 − weighted severity deductions</div></div>
     ${buildMonthlyScoreTable()}
     <div class="txs td mt2" style="background:var(--bg3);padding:6px 8px;border-radius:6px;">
       <span style="display:inline-block;width:10px;height:10px;background:rgba(22,163,74,0.15);border:1px solid var(--green);border-radius:2px;margin-right:3px;"></span>≥80% Compliant &nbsp;
@@ -2498,7 +2515,7 @@ function exportAnalyticsExcel(){
   var clauseData=Object.values(clauseMap).sort(function(a,b){return b.NCCount-a.NCCount||a.ClauseName.localeCompare(b.ClauseName);}).slice(0,10);
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(clauseData),'Recurring Clauses');
   var months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];var yr=new Date().getFullYear();
-  var monthlyData=depts.filter(d=>trendFindings.some(f=>f.dept===d.code)||latestDeptAuditScore(d.code)).map(d=>{var row={Department:d.name};months.forEach(function(mn,mi){var monthEnd=new Date(yr,mi+1,0,23,59,59,999);var s=latestDeptAuditScoreAt(d.code,monthEnd);var cr=cumulativeClosureRateAt(trendFindings,d.code,monthEnd,yr);row[mn+'_Score']=s!==null?s+'%':'—';row[mn+'_Closure']=cr!==null?cr+'%':'—';});return row;});
+  var monthlyData=depts.filter(d=>deptHasAuditInYear(d.code,yr)).map(d=>{var row={Department:d.name};months.forEach(function(mn,mi){var monthEnd=new Date(yr,mi+1,0,23,59,59,999);var audit=latestDeptAuditInMonth(d.code,yr,mi);var s=audit?frozenAuditScore(audit):null;var cr=audit?cumulativeClosureRateAt(trendFindings,d.code,monthEnd,yr):null;row[mn+'_Score']=s!==null?s+'%':'—';row[mn+'_Closure']=cr!==null?cr+'%':'—';});return row;});
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(monthlyData),'Monthly Trends');
   XLSX.writeFile(wb,'OnePWS_Analytics_'+Date.now()+'.xlsx');showToast('Excel exported!');
 }
