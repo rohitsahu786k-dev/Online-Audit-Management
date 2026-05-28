@@ -764,7 +764,15 @@ app.post('/api/auth/reset-password', wrapAsync(async (req, res) => {
   res.json({ ok: true, userId: user.id, loginId: user.loginId, updatedAt: now });
 }));
 
-app.use(express.static(__dirname));
+app.use(express.static(path.join(__dirname, 'public'), {
+  etag: false,
+  maxAge: 0,
+  setHeaders(res, filePath) {
+    if (filePath.endsWith('.html')) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    }
+  }
+}));
 
 app.use((err, _req, res, _next) => {
   const status = err.statusCode || 500;
