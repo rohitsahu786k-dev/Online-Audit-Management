@@ -662,6 +662,9 @@ function _sanitizeSyncData(k,data){
     return normalizeFindingsData(data.map(function(f){return(f&&typeof f==='object')?Object.assign({},f,{clause:String(f.clause||'-')}):f;})).value;
     return data.map(function(f){return(f&&typeof f==='object')?Object.assign({},f,{clause:String(f.clause||'—')}):f;});
   }
+  if(k==='ap_completed_audits'&&Array.isArray(data)){
+    return normalizeCompletedAuditsData(data).value;
+  }
   return data;
 }
 
@@ -1352,20 +1355,21 @@ function startIconObserver(){
 var _debounceTimers={};function debounce(key,fn,ms){clearTimeout(_debounceTimers[key]);_debounceTimers[key]=setTimeout(fn,ms||300);}
 
 // ISO/AS9100D Audit Score — Weighted Severity Deduction
-function auditScore(findings){
-  if(!findings||!findings.length)return 100;
-  var c=0,ma=0,mi=0,ob=0;
-  findings.forEach(function(f){
-    var sev=String(f.sev||f.severity||'obs').toLowerCase();
-    if(sev==='critical')c++;
-    else if(sev==='major')ma++;
-    else if(sev==='minor')mi++;
-    else ob++;
-  });
-  // Deduction weights per AS9100D severity classification
-  // Critical NC: -15 | Major NC: -10 | Minor NC: -5 | Observation: -2
-  var score=100-(c*15)-(ma*10)-(mi*5)-(ob*2);
+function normalizeAuditSeverity(sev){
+  var s=String(sev||'obs').toLowerCase().trim();
+  if(s.indexOf('critical')>-1)return 'critical';
+  if(s.indexOf('major')>-1)return 'major';
+  if(s.indexOf('minor')>-1)return 'minor';
+  if(s==='ob'||s==='obs'||s.indexOf('observation')>-1)return 'obs';
+  return 'obs';
+}
+function scoreFromFindingCounts(counts){
+  counts=counts||{};
+  var score=100-(Number(counts.critical||0)*15)-(Number(counts.major||0)*10)-(Number(counts.minor||0)*5)-(Number(counts.obs||0)*2);
   return Math.min(100,Math.max(0,Math.round(score)));
+}
+function auditScore(findings){
+  return scoreFromFindingCounts(auditFindingCounts(findings));
 }
 function closureRate(findings){
   if(!findings||!findings.length)return 0;
@@ -1375,30 +1379,65 @@ function auditScoreColor(score){return score>=80?'green':score>=60?'amber':'red'
 function auditScoreBadge(score){return score>=80?'b-green':score>=60?'b-amber':'b-red';}
 function auditScoreStatus(score){return score>=80?'Compliant':score>=60?'At Risk':'Non-Compliant';}
 function auditFindingCounts(findings){
-  var counts={critical:0,major:0,minor:0,obs:0,total:0};
+  var c=0,ma=0,mi=0,ob=0;
   (findings||[]).forEach(function(f){
-    var sev=String(f.sev||f.severity||'obs').toLowerCase();
-    if(sev==='critical')counts.critical++;
-    else if(sev==='major')counts.major++;
-    else if(sev==='minor')counts.minor++;
-    else counts.obs++;
-    counts.total++;
+    var sev=normalizeAuditSeverity(f&&((f.sev!==undefined?f.sev:f.severity)));
+    if(sev==='critical')c++;
+    else if(sev==='major')ma++;
+    else if(sev==='minor')mi++;
+    else ob++;
   });
-  return counts;
+  return {critical:c,major:ma,minor:mi,obs:ob,total:c+ma+mi+ob};
 }
 function auditScoreFromSessionFindings(session){
   return auditScore(Object.values((session&&session.findings)||{}));
 }
+function normalizeCompletedAuditsData(data){
+  if(!Array.isArray(data))return{value:[],changed:!!data};
+  var changed=false;
+  var value=data.map(function(raw){
+    var audit=(raw&&typeof raw==='object')?raw:{};
+    if(audit!==raw)changed=true;
+    var updates={};
+    var frozen=Number(audit.auditScoreFrozen);
+    if(Number.isFinite(frozen)){
+      frozen=Math.min(100,Math.max(0,Math.round(frozen)));
+      if(audit.auditScoreFrozen!==frozen){updates.auditScoreFrozen=frozen;changed=true;}
+    }else if(audit.session&&audit.session.findings){
+      updates.auditScoreFrozen=auditScoreFromSessionFindings(audit.session);changed=true;
+    }
+    if(!audit.auditFindingCountsFrozen&&audit.session&&audit.session.findings){
+      updates.auditFindingCountsFrozen=auditFindingCounts(Object.values(audit.session.findings));changed=true;
+    }
+    if(!String(audit.status||'').trim()){updates.status='submitted';changed=true;}
+    return Object.keys(updates).length?Object.assign({},audit,updates):audit;
+  });
+  return{value:value,changed:changed};
+}
+function repairCompletedAuditScores(){
+  var fixed=normalizeCompletedAuditsData(LS.get('ap_completed_audits',[]));
+  if(fixed.changed){
+    LS.set('ap_completed_audits',fixed.value);
+    return true;
+  }
+  return false;
+}
 function completedAuditsSorted(deptCode){
-  return (LS.get('ap_completed_audits',[])||[]).filter(function(a){return !deptCode||a.dept===deptCode;}).slice().sort(function(a,b){
+  return normalizeCompletedAuditsData(LS.get('ap_completed_audits',[])||[]).value.filter(function(a){return (!deptCode||a.dept===deptCode)&&(!a.status||a.status==='submitted');}).slice().sort(function(a,b){
     return new Date(a.submittedAt||a.date||0)-new Date(b.submittedAt||b.date||0);
   });
 }
 function frozenAuditScore(audit){
   if(!audit)return null;
-  if(typeof audit.auditScoreFrozen==='number')return audit.auditScoreFrozen;
+  var frozen=Number(audit.auditScoreFrozen);
+  if(Number.isFinite(frozen))return Math.min(100,Math.max(0,Math.round(frozen)));
+  if(audit.auditFindingCountsFrozen)return scoreFromFindingCounts(audit.auditFindingCountsFrozen);
   if(audit.session&&audit.session.findings)return auditScoreFromSessionFindings(audit.session);
   return null;
+}
+function latestDeptAudit(deptCode){
+  var audits=completedAuditsSorted(deptCode);
+  return audits.length?audits[audits.length-1]:null;
 }
 function latestDeptAuditScore(deptCode){
   var audits=completedAuditsSorted(deptCode);
@@ -1411,6 +1450,21 @@ function latestDeptAuditScoreAt(deptCode,monthEnd){
   var audits=completedAuditsSorted(deptCode).filter(function(a){var d=parseAuditDate(a.submittedAt||a.date);return d&&d<=monthEnd;});
   if(!audits.length)return null;
   return frozenAuditScore(audits[audits.length-1]);
+}
+function latestDeptAuditInMonth(deptCode,yr,monthIndex){
+  var start=new Date(yr,monthIndex,1);
+  var end=new Date(yr,monthIndex+1,0,23,59,59,999);
+  var audits=completedAuditsSorted(deptCode).filter(function(a){
+    var d=parseAuditDate(a.submittedAt||a.date,yr);
+    return d&&d>=start&&d<=end;
+  });
+  return audits.length?audits[audits.length-1]:null;
+}
+function deptHasAuditInYear(deptCode,yr){
+  return completedAuditsSorted(deptCode).some(function(a){
+    var d=parseAuditDate(a.submittedAt||a.date,yr);
+    return d&&d.getFullYear()===yr;
+  });
 }
 function orgLatestAuditScore(depts){
   var scores=(depts||APP.depts).map(function(d){var s=latestDeptAuditScore(d.code);return s&&typeof s.score==='number'?s.score:null;}).filter(function(v){return v!==null;});
@@ -1430,6 +1484,72 @@ function parseAuditDate(value,yr){
   }
   var d=new Date(s);if(!isNaN(d))return d;
   d=new Date(s+' '+(yr||new Date().getFullYear()));return isNaN(d)?null:d;
+}
+function auditDateText(audit){
+  if(!audit)return '';
+  var d=parseAuditDate(audit.submittedAt||audit.date);
+  if(!d)return String(audit.submittedAt||audit.date||'');
+  return d.toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'});
+}
+function auditScoreTrendHtml(scoreInfo){
+  if(!scoreInfo||scoreInfo.delta===null)return '';
+  var color=scoreInfo.delta>0?'green':scoreInfo.delta<0?'red':'text3';
+  var mark=scoreInfo.delta>0?'▲':scoreInfo.delta<0?'▼':'→';
+  var title='Previous: '+scoreInfo.prevScore+'%';
+  var dt=auditDateText(scoreInfo.prev);
+  if(dt)title+=' on '+dt;
+  return ' <span class="txx" style="color:var(--'+color+')" title="'+sanitize(title)+'">'+mark+Math.abs(scoreInfo.delta)+'</span>';
+}
+function auditScoreTitle(scoreInfo){
+  if(!scoreInfo||typeof scoreInfo.score!=='number')return 'No audit has been conducted yet';
+  var title='Latest audit: '+scoreInfo.score+'%';
+  var ref=scoreInfo.audit&&(scoreInfo.audit.ref||scoreInfo.audit.id);
+  var dt=auditDateText(scoreInfo.audit);
+  if(ref)title+=' · '+ref;
+  if(dt)title+=' · '+dt;
+  return title;
+}
+function registerFindingsForAudit(audit){
+  if(!audit)return [];
+  var auditKeys=new Set([audit.id,audit.ref].filter(Boolean).map(String));
+  var refs=new Set((audit.findingRefs||[]).map(String));
+  return (APP.findings||[]).filter(function(f){
+    if(!f||f.dept!==audit.dept)return false;
+    return refs.has(String(f.ref||''))||auditKeys.has(String(f.auditId||''))||auditKeys.has(String(f.auditRef||''));
+  });
+}
+function auditFindingRows(audit){
+  if(!audit)return [];
+  var registerRows=registerFindingsForAudit(audit);
+  var byRef={};registerRows.forEach(function(f){if(f.ref)byRef[f.ref]=f;});
+  var refs=audit.findingRefs||[];
+  var sessionFindings=audit.session&&audit.session.findings?Object.entries(audit.session.findings):[];
+  var cps=(audit.sections||[]).flatMap(function(s){return s._checkpoints||[];});
+  if(sessionFindings.length){
+    return sessionFindings.map(function(entry,idx){
+      var qId=entry[0],sf=entry[1]||{},cp=cps.find(function(q){return q.id===qId;})||{};
+      var ref=refs[idx]||sf.ref||'',reg=(ref&&byRef[ref])||registerRows.find(function(r){return (r.desc||'')===(sf.desc||'')&&normalizeAuditSeverity(r.sev)===normalizeAuditSeverity(sf.severity||sf.sev);})||{};
+      var sev=normalizeAuditSeverity(sf.severity||sf.sev||reg.sev);
+      return Object.assign({},reg,{
+        id:reg.id||('audit_'+(audit.id||audit.ref||audit.dept)+'_'+idx),
+        ref:reg.ref||ref||((audit.ref||audit.dept)+'-'+String(idx+1).padStart(2,'0')),
+        dept:audit.dept,deptName:audit.deptName,
+        desc:sf.desc||reg.desc||'',
+        sev:sev,severity:sev,
+        rc:sf.rc||reg.rc||'',
+        clause:cp.clause||reg.clause||'—',
+        status:reg.status||'open',
+        capaStatus:reg.capaStatus||reg.status||'open',
+        auditId:audit.id,auditRef:audit.ref,
+        auditFiles:Array.isArray(sf.files)?sf.files:[],
+        closureFiles:Array.isArray(reg.closureFiles)?reg.closureFiles:[],
+        closureEvidence:reg.closureEvidence||'',
+        decision:reg.decision||null,
+        decisionComments:reg.decisionComments||''
+      });
+    });
+  }
+  return registerRows.map(function(f){var sev=normalizeAuditSeverity(f.sev||f.severity);return Object.assign({},f,{sev:sev,severity:sev});});
 }
 function findingRaisedDate(f,yr){
   return parseAuditDate(f.createdAt||f.submittedAt||f.auditSubmittedAt||f.date,yr)||parseAuditDate(f.due,yr);
@@ -1652,6 +1772,7 @@ function initApp(){
   initApiSync();
   ensureRoleDefaults();
   repairFindingsStore();
+  repairCompletedAuditScores();
   el('uname').textContent=u.name;
   el('urole').textContent=ROLE_LABELS[u.role]||u.role;
   const av=el('uav');
@@ -1907,7 +2028,7 @@ function buildDeptReportAttachment(code){
 }
 function sendDeptReportEmail(code){
   const d=APP.depts.find(x=>x.code===code);if(!d)return;
-  const df=filteredFindings().filter(f=>f.dept===code);
+  const df=reportFindingsForDept(code);
   const scoreInfo=latestDeptAuditScore(code);
   const score=scoreInfo&&typeof scoreInfo.score==='number'?scoreInfo.score:null;
   const scoreText=score===null?'N/A':score+'%';
@@ -1983,22 +2104,19 @@ function renderDashboard(){
   const overallAuditScore=orgLatestAuditScore(visibleDepts);
   const deptScores=visibleDepts.map(d=>{
     const df=F.filter(f=>f.dept===d.code);
-    const cr=df.filter(f=>f.sev==='critical').length;
-    const ma=df.filter(f=>f.sev==='major').length;
-    const mi=df.filter(f=>f.sev==='minor').length;
-    const ob=df.filter(f=>f.sev==='obs'||f.sev==='observation').length;
+    const counts=auditFindingCounts(df);
     const scoreInfo=latestDeptAuditScore(d.code);
     const score=scoreInfo&&typeof scoreInfo.score==='number'?scoreInfo.score:null;
     const closed=df.filter(f=>f.status==='closed').length;
     const inprog=df.filter(f=>f.status==='in-progress'||f.status==='pending-closure').length;
-    return{name:d.name,score,scoreInfo,findings:df.length,open:df.filter(f=>f.status!=='closed').length,inprog,closed,cr:closureRate(df),c:cr,ma,mi,ob,code:d.code};
-  }).filter(d=>d.findings>0||d.score!==null);
+    return{name:d.name,score,scoreInfo,findings:df.length,open:df.filter(f=>f.status!=='closed').length,inprog,closed,cr:closureRate(df),c:counts.critical,ma:counts.major,mi:counts.minor,ob:counts.obs,code:d.code};
+  });
   const sorted=[...deptScores].filter(d=>d.score!==null).sort((a,b)=>b.score-a.score);
   const top5=sorted.slice(0,5);const bot5=sorted.slice(-5).reverse();
   return`
   <div class="grid g4 sg">
     <div class="stat"><div class="sl">Audit Score</div><div class="sv" style="color:var(--${overallAuditScore===null?'text3':auditScoreColor(overallAuditScore)})">${overallAuditScore===null?'N/A':overallAuditScore+'%'}</div><div class="sd">Latest frozen audit avg.</div></div>
-    <div class="stat"><div class="sl">Open Findings</div><div class="sv" style="color:var(--amber)">${open}</div><div class="sd dd">${F.filter(f=>f.sev==='critical'&&f.status!=='closed').length} critical</div></div>
+    <div class="stat"><div class="sl">Open Findings</div><div class="sv" style="color:var(--amber)">${open}</div><div class="sd dd">${F.filter(f=>normalizeAuditSeverity(f.sev||f.severity)==='critical'&&f.status!=='closed').length} critical</div></div>
     <div class="stat"><div class="sl">Closure Rate</div><div class="sv" style="color:var(--${closureRate(F)>=90?'green':closureRate(F)>=60?'amber':'red'})">${closureRate(F)}%</div><div class="sd">Target 90%</div></div>
     <div class="stat"><div class="sl">Completed Audits</div><div class="sv">${(LS.get('ap_completed_audits',[])||[]).length}</div><div class="sd du">Total to date</div></div>
   </div>
@@ -2014,9 +2132,9 @@ function renderDashboard(){
             <td style="color:var(--red);font-weight:${d.open?800:400}">${d.open||'—'}</td>
             <td style="color:var(--amber);font-weight:${d.inprog?800:400}">${d.inprog||'—'}</td>
             <td style="color:var(--green);font-weight:${d.closed?800:400}">${d.closed||'—'}</td>
-            <td style="color:var(--${d.score===null?'text3':auditScoreColor(d.score)});font-weight:800">${d.score===null?'N/A':d.score+'%'}${d.scoreInfo&&d.scoreInfo.delta!==null?` <span class="txx" title="Previous: ${d.scoreInfo.prevScore}%">${d.scoreInfo.delta>0?'▲':d.scoreInfo.delta<0?'▼':'→'}${Math.abs(d.scoreInfo.delta)}</span>`:''}</td>
+            <td title="${sanitize(auditScoreTitle(d.scoreInfo))}" style="color:var(--${d.score===null?'text3':auditScoreColor(d.score)});font-weight:800">${d.score===null?'N/A':d.score+'%'}${auditScoreTrendHtml(d.scoreInfo)}</td>
             <td style="color:var(--${d.cr>=90?'green':d.cr>=60?'amber':'red'})">${d.cr}%</td>
-            <td>${d.score===null?badge('b-gray','Not Audited'):badge(auditScoreBadge(d.score),auditScoreStatus(d.score))}</td>
+            <td title="${d.score===null?'No audit has been conducted yet':''}">${d.score===null?badge('b-gray','Not Audited'):badge(auditScoreBadge(d.score),auditScoreStatus(d.score))}</td>
             <td><button class="btn btn-ghost btn-sm" onclick="APP.findingsDeptFilter='${d.code}';navigate('findings')">→</button></td>
           </tr>`).join('')}
           ${deptScores.length?`<tr style="border-top:2px solid var(--border);font-weight:900;background:var(--bg3);">
@@ -2201,6 +2319,7 @@ function renderAnalytics(){
   var _isSpoc2=APP.currentUser?.role==='spoc';var _sDept2=APP.currentUser?.dept||'';
   const _baseFindings2=filteredFindings();
   const F=_isSpoc2?_baseFindings2.filter(f=>f.dept===_sDept2):_baseFindings2;
+  const trendFindings=_isSpoc2?APP.findings.filter(f=>f.dept===_sDept2):APP.findings;
   const depts=_isSpoc2?APP.depts.filter(d=>d.code===_sDept2):APP.depts;
   const closed=F.filter(f=>f.status==='closed').length;
   const delayed=F.filter(f=>f.status==='delayed').length;
@@ -2217,18 +2336,20 @@ function renderAnalytics(){
     var data=[];
     for(var m=0;m<12;m++){
       var monthEnd=new Date(yr,m+1,0,23,59,59,999);
-      var mFinds=filteredFindings().filter(function(f){
+      var auditThisMonth=latestDeptAuditInMonth(deptCode,yr,m);
+      var asOfDate=auditThisMonth?monthEnd:null;
+      var mFinds=auditThisMonth?trendFindings.filter(function(f){
         if(deptCode&&f.dept!==deptCode)return false;
         var raised=findingRaisedDate(f,yr);
-        return raised&&raised<=monthEnd;
-      });
-      var cl=mFinds.filter(function(f){
+        return raised&&raised<=asOfDate;
+      }):[];
+      var cl=auditThisMonth?mFinds.filter(function(f){
         if(f.status!=='closed')return false;
         var closedAt=findingClosedDate(f,yr);
-        return !closedAt||closedAt<=monthEnd;
-      }).length;
-      var cr=cumulativeClosureRateAt(filteredFindings(),deptCode,monthEnd,yr);
-      var as=latestDeptAuditScoreAt(deptCode,monthEnd);
+        return !closedAt||closedAt<=asOfDate;
+      }).length:0;
+      var cr=auditThisMonth?cumulativeClosureRateAt(trendFindings,deptCode,asOfDate,yr):null;
+      var as=auditThisMonth?frozenAuditScore(auditThisMonth):null;
       data.push({month:months[m],total:mFinds.length,closed:cl,cr:cr,auditScore:as});
     }
     return data;
@@ -2236,7 +2357,7 @@ function renderAnalytics(){
   
   // Build closure rate trend table (month-over-month change)
   function buildClosureTrend(){
-    var rows=depts.filter(function(d){return F.some(function(f){return f.dept===d.code;});}).map(function(d){
+    var rows=depts.filter(function(d){return deptHasAuditInYear(d.code,yr);}).map(function(d){
       var md=getMonthlyData(d.code);
       var cells='';
       for(var m=0;m<12;m++){
@@ -2256,13 +2377,13 @@ function renderAnalytics(){
       }
       return '<tr><td class="pr" style="white-space:nowrap;">'+d.name+'</td>'+cells+'</tr>';
     });
-    if(!rows.length)return '<div class="txs td">No data — findings will populate this view after audits.</div>';
+    if(!rows.length)return '<div class="txs td">No submitted audits yet — monthly closure rates will appear after audit submission.</div>';
     return '<div class="tw"><table style="font-size:11px;"><thead><tr><th>Department</th>'+months.map(function(m){return '<th style="text-align:center;">'+m+'</th>';}).join('')+'</tr></thead><tbody>'+rows.join('')+'</tbody></table></div>';
   }
   
   // Build monthly audit score table
   function buildMonthlyScoreTable(){
-    var rows=depts.filter(function(d){return F.some(function(f){return f.dept===d.code;});}).map(function(d){
+    var rows=depts.filter(function(d){return deptHasAuditInYear(d.code,yr);}).map(function(d){
       var md=getMonthlyData(d.code);
       var cells='';
       for(var m=0;m<12;m++){
@@ -2273,7 +2394,7 @@ function renderAnalytics(){
       }
       return '<tr><td class="pr" style="white-space:nowrap;">'+d.name+'</td>'+cells+'</tr>';
     });
-    if(!rows.length)return '<div class="txs td">No data — findings will populate this view after audits.</div>';
+    if(!rows.length)return '<div class="txs td">No submitted audits yet — monthly scores will appear after audit submission.</div>';
     return '<div class="tw"><table style="font-size:11px;"><thead><tr><th>Department</th>'+months.map(function(m){return '<th style="text-align:center;font-size:10px;">'+m+'</th>';}).join('')+'</tr></thead><tbody>'+rows.join('')+'</tbody></table></div>';
   }
   
@@ -2292,7 +2413,7 @@ function renderAnalytics(){
     </div>
     <div class="card">
       <div class="ch"><span class="dot" style="background:var(--amber)"></span>Severity Distribution</div>
-      ${[['Critical',F.filter(f=>f.sev==='critical').length,'red'],['Major',F.filter(f=>f.sev==='major').length,'amber'],['Minor',F.filter(f=>f.sev==='minor').length,'teal'],['Observation',F.filter(f=>f.sev==='obs'||f.sev==='observation').length,'purple']].map(([l,n,cl])=>`
+      ${[['Critical',auditFindingCounts(F).critical,'red'],['Major',auditFindingCounts(F).major,'amber'],['Minor',auditFindingCounts(F).minor,'teal'],['Observation',auditFindingCounts(F).obs,'purple']].map(([l,n,cl])=>`
         <div class="fb txs mb1"><span>${l}</span><span style="color:var(--${cl});font-weight:800">${n} (Deduction: ${l==='Critical'?n*15:l==='Major'?n*10:l==='Minor'?n*5:n*2}pts)</span></div>
         <div class="prog mb2"><div class="pf" style="width:${F.length?Math.min(100,n/F.length*100):0}%;background:var(--${cl})"></div></div>`).join('')}
       <div class="txs td mt1" style="background:var(--bg3);padding:6px 8px;border-radius:6px;"><strong>Audit Score Formula:</strong> frozen at audit submit: 100 − (Critical×15) − (Major×10) − (Minor×5) − (Obs×2) = <strong style="color:var(--${overallScore===null?'text3':auditScoreColor(overallScore)})">${overallScore===null?'N/A':overallScore+'%'}</strong></div>
@@ -2307,11 +2428,11 @@ function renderAnalytics(){
     </div>
   </div>
   <div class="card sg">
-    <div class="ch fb"><div class="flex g2u"><span class="dot" style="background:var(--teal)"></span>Monthly Closure Rate Trend — ${yr}</div><div class="txs td">Closed till month-end ÷ findings raised till month-end</div></div>
+    <div class="ch fb"><div class="flex g2u"><span class="dot" style="background:var(--teal)"></span>Monthly Closure Rate Trend — ${yr}</div><div class="txs td">Only audit months · closed till month-end ÷ findings raised till month-end</div></div>
     ${buildClosureTrend()}
   </div>
   <div class="card sg">
-    <div class="ch fb"><div class="flex g2u"><span class="dot" style="background:var(--brand)"></span>Monthly Audit Score — ${yr}</div><div class="txs td">Score = 100 − Weighted Severity Deductions</div></div>
+    <div class="ch fb"><div class="flex g2u"><span class="dot" style="background:var(--brand)"></span>Monthly Audit Score — ${yr}</div><div class="txs td">Only audit months · score = 100 − weighted severity deductions</div></div>
     ${buildMonthlyScoreTable()}
     <div class="txs td mt2" style="background:var(--bg3);padding:6px 8px;border-radius:6px;">
       <span style="display:inline-block;width:10px;height:10px;background:rgba(22,163,74,0.15);border:1px solid var(--green);border-radius:2px;margin-right:3px;"></span>≥80% Compliant &nbsp;
@@ -2371,6 +2492,7 @@ function exportAnalyticsExcel(){
   if(!window.XLSX){showToast('Excel loading...');return;}
   var _baseFindingsXls=filteredFindings();
   var F=APP.currentUser?.role==='spoc'?_baseFindingsXls.filter(f=>f.dept===APP.currentUser?.dept):_baseFindingsXls;
+  var trendFindings=APP.currentUser?.role==='spoc'?APP.findings.filter(f=>f.dept===APP.currentUser?.dept):APP.findings;
   var depts=APP.currentUser?.role==='spoc'?APP.depts.filter(d=>d.code===APP.currentUser?.dept):APP.depts;
   var overallScore=orgLatestAuditScore(depts);
   var wb=XLSX.utils.book_new();
@@ -2393,7 +2515,7 @@ function exportAnalyticsExcel(){
   var clauseData=Object.values(clauseMap).sort(function(a,b){return b.NCCount-a.NCCount||a.ClauseName.localeCompare(b.ClauseName);}).slice(0,10);
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(clauseData),'Recurring Clauses');
   var months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];var yr=new Date().getFullYear();
-  var monthlyData=depts.filter(d=>F.some(f=>f.dept===d.code)||latestDeptAuditScore(d.code)).map(d=>{var row={Department:d.name};months.forEach(function(mn,mi){var monthEnd=new Date(yr,mi+1,0,23,59,59,999);var s=latestDeptAuditScoreAt(d.code,monthEnd);var cr=cumulativeClosureRateAt(filteredFindings(),d.code,monthEnd,yr);row[mn+'_Score']=s!==null?s+'%':'—';row[mn+'_Closure']=cr!==null?cr+'%':'—';});return row;});
+  var monthlyData=depts.filter(d=>deptHasAuditInYear(d.code,yr)).map(d=>{var row={Department:d.name};months.forEach(function(mn,mi){var monthEnd=new Date(yr,mi+1,0,23,59,59,999);var audit=latestDeptAuditInMonth(d.code,yr,mi);var s=audit?frozenAuditScore(audit):null;var cr=audit?cumulativeClosureRateAt(trendFindings,d.code,monthEnd,yr):null;row[mn+'_Score']=s!==null?s+'%':'—';row[mn+'_Closure']=cr!==null?cr+'%':'—';});return row;});
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(monthlyData),'Monthly Trends');
   XLSX.writeFile(wb,'OnePWS_Analytics_'+Date.now()+'.xlsx');showToast('Excel exported!');
 }
@@ -2881,17 +3003,14 @@ function reportFindingsForDept(code){
   let rows=filteredFindings().filter(f=>f.dept===code);
   const status=APP.reportStatusFilter||'completed';
   if(status==='completed'){
-    const audits=(LS.get('ap_completed_audits',[])||[]).filter(a=>a.dept===code);
-    const auditIds=new Set(audits.flatMap(a=>[a.id,a.ref].filter(Boolean)));
-    const refs=new Set(audits.flatMap(a=>a.findingRefs||[]));
-    rows=rows.filter(f=>auditIds.has(f.auditId)||auditIds.has(f.auditRef)||refs.has(f.ref));
+    rows=auditFindingRows(latestDeptAudit(code));
   }
-  return rows;
+  return rows.map(function(f){var sev=normalizeAuditSeverity(f.sev||f.severity);return Object.assign({},f,{sev:sev,severity:sev});});
 }
 function reportDeptList(){
   var depts=APP.currentUser?.role==='spoc'?APP.depts.filter(d=>d.code===APP.currentUser?.dept):(APP.reportDeptFilter&&APP.reportDeptFilter!=='all'?APP.depts.filter(d=>d.code===APP.reportDeptFilter):APP.depts);
   if((APP.reportStatusFilter||'completed')==='completed'){
-    const done=new Set((LS.get('ap_completed_audits',[])||[]).map(a=>a.dept));
+    const done=new Set(completedAuditsSorted().map(a=>a.dept));
     depts=depts.filter(d=>done.has(d.code));
   }
   return depts;
@@ -2947,23 +3066,24 @@ function filterReportDept(code){
 }
 function searchReports(q){
   q=q.toLowerCase().trim();
-  const depts=q?APP.depts.filter(d=>(d.name+d.code).toLowerCase().includes(q)||filteredFindings().some(f=>f.dept===d.code&&f.ref.toLowerCase().includes(q))):APP.depts;
+  const pool=reportDeptList();
+  const depts=q?pool.filter(d=>(d.name+d.code).toLowerCase().includes(q)||reportFindingsForDept(d.code).some(f=>String(f.ref||'').toLowerCase().includes(q))):pool;
   el('report-cards').innerHTML=genReportCards(depts);
 }
 function genReportCards(depts){
   return depts.map(d=>{
     const df=reportFindingsForDept(d.code);
-    const c=df.filter(f=>f.sev==='critical').length;
-    const ma=df.filter(f=>f.sev==='major').length;
-    const mi=df.filter(f=>f.sev==='minor').length;
+    const counts=auditFindingCounts(df);
+    const c=counts.critical,ma=counts.major,mi=counts.minor,ob=counts.obs;
     const scoreInfo=latestDeptAuditScore(d.code);
     const score=scoreInfo&&typeof scoreInfo.score==='number'?scoreInfo.score:null;
     const sc=score===null?'text3':auditScoreColor(score);
+    const lastDate=scoreInfo&&scoreInfo.audit?auditDateText(scoreInfo.audit):(d.lastAudit||'Not audited');
     return`<div class="card" style="cursor:pointer;" onclick="showDeptReport('${d.code}')">
-      <div class="fb mb2">${badge(c>0?'b-red':ma>0?'b-amber':'b-green',c>0?'Critical':ma>0?'Major':'Compliant')}<span class="txx td">${d.lastAudit||'Not audited'}</span></div>
+      <div class="fb mb2">${badge(c>0?'b-red':ma>0?'b-amber':'b-green',c>0?'Critical':ma>0?'Major':'Compliant')}<span class="txx td">${lastDate||'Not audited'}</span></div>
       <div class="f7 tsm">${d.name}</div>
       <div class="txs tm mt1">${d.spoc} · ${df.length} finding(s)</div>
-      <div class="fb mt2"><span style="font-size:18px;font-weight:900;color:var(--${sc})">${score===null?'N/A':score+'%'}</span><div class="flex g2u txs"><span style="color:var(--red)">${c}C</span><span style="color:var(--amber)">${ma}M</span><span style="color:var(--teal)">${mi}m</span></div></div>
+      <div class="fb mt2"><span title="${sanitize(auditScoreTitle(scoreInfo))}" style="font-size:18px;font-weight:900;color:var(--${sc})">${score===null?'N/A':score+'%'}</span><div class="flex g2u txs"><span style="color:var(--red)">${c}C</span><span style="color:var(--amber)">${ma}M</span><span style="color:var(--teal)">${mi}m</span><span style="color:var(--purple)">${ob}O</span></div></div>
       <div style="margin-top:9px;padding-top:9px;border-top:1px solid var(--border);display:flex;gap:5px;">
         <button class="btn btn-ghost btn-sm" style="flex:1" onclick="event.stopPropagation();genDeptPDF('${d.code}')">📄 PDF</button>
         <button class="btn btn-ghost btn-sm" style="flex:1" onclick="event.stopPropagation();genDeptExcel('${d.code}')">📊 Excel</button>
@@ -2974,23 +3094,23 @@ function genReportCards(depts){
 function showDeptReport(code){
   const d=APP.depts.find(x=>x.code===code);if(!d)return;
   const df=reportFindingsForDept(code);
-  const c=df.filter(f=>f.sev==='critical').length,ma=df.filter(f=>f.sev==='major').length,mi=df.filter(f=>f.sev==='minor').length;
+  const counts=auditFindingCounts(df);
+  const c=counts.critical,ma=counts.major,mi=counts.minor,ob=counts.obs;
   const scoreInfo=latestDeptAuditScore(code);
   const score=scoreInfo&&typeof scoreInfo.score==='number'?scoreInfo.score:null,sc=score===null?'text3':auditScoreColor(score);
+  const latestAudit=latestDeptAudit(code);
   const stds=APP.standards.map(id=>AUDIT_STANDARDS.find(s=>s.id===id)?.label||id).join(' + ');
   const rp=el('report-preview');rp.className='card sg';
   rp.innerHTML=`
   <div class="fb mb3" style="border-bottom:2px solid var(--brand);padding-bottom:11px;">
     <div><div class="f7" style="font-size:14px;">INTERNAL QUALITY AUDIT REPORT</div><div class="txs td mt1">OnePWS Pvt. Ltd. · ${d.name} · ${stds}</div></div>
-    <div style="text-align:right;"><div class="txs td">SPOC: ${d.spoc}</div><div class="txs td">Last: ${d.lastAudit||'—'}</div><div class="txs td">${new Date().toLocaleDateString()}</div></div>
+    <div style="text-align:right;"><div class="txs td">SPOC: ${d.spoc}</div><div class="txs td">Last: ${latestAudit?auditDateText(latestAudit):(d.lastAudit||'—')}</div><div class="txs td">${new Date().toLocaleDateString()}</div></div>
   </div>
-  <div class="grid g4 mb3" style="gap:9px;">${[['Audit Score',score===null?'N/A':score+'%',sc],['Critical',c,'red'],['Major',ma,'amber'],['Minor',mi,'teal']].map(([l,v,col])=>`<div style="text-align:center;background:var(--bg3);border-radius:7px;padding:9px;"><div style="font-size:20px;font-weight:900;color:var(--${col})">${v}</div><div class="txx td">${l}</div></div>`).join('')}</div>
+  <div class="grid g4 mb3" style="gap:9px;">${[['Audit Score',score===null?'N/A':score+'%',sc],['Critical',c,'red'],['Major',ma,'amber'],['Minor',mi,'teal'],['Observation',ob,'purple']].map(([l,v,col])=>`<div style="text-align:center;background:var(--bg3);border-radius:7px;padding:9px;"><div style="font-size:20px;font-weight:900;color:var(--${col})">${v}</div><div class="txx td">${l}</div></div>`).join('')}</div>
   <div class="ch"><span class="dot" style="background:var(--green)"></span>Full Audit Checklist Results</div>
   ${(function(){
-    const cas=LS.get('ap_completed_audits',[])||[];
-    const deptAudits=cas.filter(a=>a.dept===code);
-    if(!deptAudits.length)return '<div class="info-box mb3">No completed audits for this department yet. Full checklist results will appear here after an audit is submitted.</div>';
-    const latest=deptAudits[deptAudits.length-1];
+    const latest=latestDeptAudit(code);
+    if(!latest)return '<div class="info-box mb3">No completed audits for this department yet. Full checklist results will appear here after an audit is submitted.</div>';
     const sess=latest.session||{};
     const allQ=(latest.sections||[]).flatMap(s=>s._checkpoints||[]);
     if(!allQ.length)return '<div class="txs td mb3">No checklist data in latest audit.</div>';
@@ -3013,7 +3133,7 @@ function showDeptReport(code){
     if(!df.length)return '<div class="txs td mb3">No findings to show evidence for.</div>';
     var hasAnyPhotos=false;
     var html=df.map(function(f){
-      var photos=(f.closureFiles||[]).slice();
+      var photos=(f.auditFiles||f.files||[]).concat(f.closureFiles||[]);
       if(!photos.length)return '';
       hasAnyPhotos=true;
       return '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px;">'+
@@ -3047,10 +3167,8 @@ function genDeptPDF(code){
   if(!window.jspdf){showToast('PDF loading...');return;}
   const d=APP.depts.find(x=>x.code===code);const df=reportFindingsForDept(code);
   const{jsPDF}=window.jspdf;const doc=new jsPDF();const pw=doc.internal.pageSize.getWidth();
-  const c_=df.filter(f=>f.sev==='critical').length;
-  const ma=df.filter(f=>f.sev==='major').length;
-  const mi=df.filter(f=>f.sev==='minor').length;
-  const ob=df.filter(f=>f.sev==='observation').length;
+  const counts=auditFindingCounts(df);
+  const c_=counts.critical,ma=counts.major,mi=counts.minor,ob=counts.obs;
   var scoreInfo=latestDeptAuditScore(code);
   var score=scoreInfo&&typeof scoreInfo.score==='number'?scoreInfo.score:null;
   var scoreBox=score===null?{bg:[245,247,251],fg:[139,146,168]}:(score>=80?{bg:[220,252,244],fg:[22,163,74]}:score>=60?{bg:[255,251,235],fg:[217,119,6]}:{bg:[254,242,242],fg:[220,38,38]});
@@ -3066,13 +3184,14 @@ function genDeptPDF(code){
   doc.text('SPOC: '+(d?d.spoc:'TBD')+' | Date: '+new Date().toLocaleDateString()+' | Standards: '+stds,pw/2,24,{align:'center'});
   // ── VISUAL SUMMARY (Dashboard boxes) ──
   doc.setTextColor(30,30,50);
-  var bx=14,by=34,bw=42,bh=20;
   var boxes=[
     {val:score===null?'N/A':score+'%',lbl:'AUDIT SCORE',bg:scoreBox.bg,fg:scoreBox.fg},
     {val:String(c_),lbl:'CRITICAL',bg:[254,242,242],fg:[220,38,38]},
     {val:String(ma),lbl:'MAJOR',bg:[255,251,235],fg:[217,119,6]},
-    {val:String(mi),lbl:'MINOR',bg:[240,253,250],fg:[13,148,136]}
+    {val:String(mi),lbl:'MINOR',bg:[240,253,250],fg:[13,148,136]},
+    {val:String(ob),lbl:'OBS',bg:[245,243,255],fg:[124,58,237]}
   ];
+  var bx=14,by=34,bw=(pw-28-((boxes.length-1)*4))/boxes.length,bh=20;
   boxes.forEach(function(b,i){
     var x=bx+i*(bw+4);
     doc.setFillColor(b.bg[0],b.bg[1],b.bg[2]);doc.roundedRect(x,by,bw,bh,3,3,'F');
@@ -3081,8 +3200,7 @@ function genDeptPDF(code){
     doc.setFontSize(6);doc.text(b.lbl,x+bw/2,by+17,{align:'center'});
   });
   // ── CHECKLIST FROM LATEST AUDIT ──
-  var cas=LS.get('ap_completed_audits',[])||[];
-  var deptAudit=cas.filter(function(a){return a.dept===code;}).pop();
+  var deptAudit=latestDeptAudit(code);
   var nextY=by+bh+8;
   if(deptAudit&&deptAudit.session){
     var sess=deptAudit.session;var allQ=(deptAudit.sections||[]).flatMap(function(s){return s._checkpoints||[];});
@@ -3125,7 +3243,7 @@ function genDeptPDF(code){
     var descLines=doc.splitTextToSize(f.desc||'',pw-32);
     doc.text(descLines,16,nextY);nextY+=descLines.length*3.5+3;
     // Collect photos for this finding
-    var photos=(f.closureFiles||[]).slice();
+    var photos=(f.auditFiles||f.files||[]).concat(f.closureFiles||[]);
     if(deptAudit&&deptAudit.session&&deptAudit.session.findings){
       var entries=Object.entries(deptAudit.session.findings);
       for(var ei=0;ei<entries.length;ei++){
@@ -3189,7 +3307,7 @@ function renderFindings(){
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
       <div style="display:flex;flex-direction:column;gap:3px;"><label class="lbl">Search</label><input id="f-search" placeholder="Any field..." style="min-width:160px;" oninput="APP.findingsSearch=this.value;renderFindingsTable()"></div>
       <div style="display:flex;flex-direction:column;gap:3px;"><label class="lbl">Dept</label><select id="f-dept" onchange="APP.findingsDeptFilter=this.value;renderFindingsTable()"><option value="">All</option>${APP.depts.map(d=>`<option value="${d.code}">${d.name}</option>`).join('')}</select></div>
-      <div style="display:flex;flex-direction:column;gap:3px;"><label class="lbl">Severity</label><select id="f-sev" onchange="APP.findingsSevFilter=this.value;renderFindingsTable()"><option value="">All</option><option value="critical">Critical</option><option value="major">Major</option><option value="minor">Minor</option></select></div>
+      <div style="display:flex;flex-direction:column;gap:3px;"><label class="lbl">Severity</label><select id="f-sev" onchange="APP.findingsSevFilter=this.value;renderFindingsTable()"><option value="">All</option><option value="critical">Critical</option><option value="major">Major</option><option value="minor">Minor</option><option value="obs">Observation</option></select></div>
       <div style="display:flex;flex-direction:column;gap:3px;"><label class="lbl">Status</label><select id="f-status" onchange="APP.findingsStatusFilter=this.value;renderFindingsTable()"><option value="">All</option><option value="open">Open</option><option value="delayed">Delayed</option><option value="pending-closure">Pending Review</option><option value="closed">Closed</option></select></div>
       <button class="btn btn-ghost btn-sm" onclick="clearFindingsFilters()">Clear</button>
       <button class="btn btn-brand btn-sm" onclick="exportFindingsExcel()">📊 Export</button>
@@ -3218,7 +3336,7 @@ function renderFindingsTable(){
   const q=(APP.findingsSearch||'').toLowerCase();
   let data=filterByDateRange(APP.findings,'due').filter(f=>{
     if(APP.findingsDeptFilter&&f.dept!==APP.findingsDeptFilter)return false;
-    if(APP.findingsSevFilter&&f.sev!==APP.findingsSevFilter)return false;
+    if(APP.findingsSevFilter&&normalizeAuditSeverity(f.sev||f.severity)!==APP.findingsSevFilter)return false;
     if(APP.findingsStatusFilter&&f.status!==APP.findingsStatusFilter)return false;
     if(q&&![f.ref,f.deptName,f.desc,f.clause,SEV_LABEL[f.sev],STAT_LABEL[f.status]].join(' ').toLowerCase().includes(q))return false;
     return true;
@@ -4164,7 +4282,7 @@ function processImportRows(rows,fname){
     try{
       if(type==='findings'){
         const dept=APP.depts.find(d=>d.name.toLowerCase().includes((row.Department||row.dept||'').toLowerCase()))||{name:row.Department||'Unknown',code:'UNK'};
-        const sev=(row.Severity||row.severity||'minor').toLowerCase();
+        const sev=normalizeAuditSeverity(row.Severity||row.severity||'minor');
         const nf={id:'imp_'+Date.now()+'_'+i,ref:row.ID||row.id||`IMP-${Date.now()}-${i}`,dept:dept.code,deptName:dept.name,desc:row.Description||row.description||row.Finding||'',sev:['critical','major','minor','obs'].includes(sev)?sev:'minor',clause:String(row.Clause||row.clause||'§—'),due:(function(d){if(!d)return new Date().toISOString().split('T')[0];if(typeof d==='number'){const dt=new Date((d-25569)*86400000);return dt.toISOString().split('T')[0];}return String(d);})(row.DueDate||row.due_date),status:'open',capaStatus:'open',type:'imported',activityLog:[{user:APP.currentUser?.name,action:`Imported from ${fname}`,ts:new Date().toLocaleString()}],closureEvidence:'',closureFiles:[],closureSubmittedBy:null,closureDate:null,decision:null,decisionComments:'',decisionDate:null};
         if(!nf.desc){errs++;log.push(`<span style="color:var(--red)">Row ${rn}: No description — skipped</span>`);return;}
         const F=APP.findings;if(!F.find(f=>f.ref===nf.ref)){F.push(nf);APP.findings=F;_impFindIds.push(nf.id);imp++;}else log.push(`<span style="color:var(--amber)">Row ${rn}: ${nf.ref} exists — skipped</span>`);
