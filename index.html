@@ -1356,19 +1356,100 @@ function auditScore(findings){
   if(!findings||!findings.length)return 100;
   var c=0,ma=0,mi=0,ob=0;
   findings.forEach(function(f){
-    if(f.sev==='critical')c++;
-    else if(f.sev==='major')ma++;
-    else if(f.sev==='minor')mi++;
+    var sev=String(f.sev||f.severity||'obs').toLowerCase();
+    if(sev==='critical')c++;
+    else if(sev==='major')ma++;
+    else if(sev==='minor')mi++;
     else ob++;
   });
   // Deduction weights per AS9100D severity classification
   // Critical NC: -15 | Major NC: -10 | Minor NC: -5 | Observation: -2
   var score=100-(c*15)-(ma*10)-(mi*5)-(ob*2);
-  return Math.max(0,Math.round(score));
+  return Math.min(100,Math.max(0,Math.round(score)));
 }
 function closureRate(findings){
   if(!findings||!findings.length)return 0;
   return Math.round(findings.filter(function(f){return f.status==='closed';}).length/findings.length*100);
+}
+function auditScoreColor(score){return score>=80?'green':score>=60?'amber':'red';}
+function auditScoreBadge(score){return score>=80?'b-green':score>=60?'b-amber':'b-red';}
+function auditScoreStatus(score){return score>=80?'Compliant':score>=60?'At Risk':'Non-Compliant';}
+function auditFindingCounts(findings){
+  var counts={critical:0,major:0,minor:0,obs:0,total:0};
+  (findings||[]).forEach(function(f){
+    var sev=String(f.sev||f.severity||'obs').toLowerCase();
+    if(sev==='critical')counts.critical++;
+    else if(sev==='major')counts.major++;
+    else if(sev==='minor')counts.minor++;
+    else counts.obs++;
+    counts.total++;
+  });
+  return counts;
+}
+function auditScoreFromSessionFindings(session){
+  return auditScore(Object.values((session&&session.findings)||{}));
+}
+function completedAuditsSorted(deptCode){
+  return (LS.get('ap_completed_audits',[])||[]).filter(function(a){return !deptCode||a.dept===deptCode;}).slice().sort(function(a,b){
+    return new Date(a.submittedAt||a.date||0)-new Date(b.submittedAt||b.date||0);
+  });
+}
+function frozenAuditScore(audit){
+  if(!audit)return null;
+  if(typeof audit.auditScoreFrozen==='number')return audit.auditScoreFrozen;
+  if(audit.session&&audit.session.findings)return auditScoreFromSessionFindings(audit.session);
+  return null;
+}
+function latestDeptAuditScore(deptCode){
+  var audits=completedAuditsSorted(deptCode);
+  if(!audits.length)return null;
+  var latest=audits[audits.length-1],prev=audits.length>1?audits[audits.length-2]:null;
+  var score=frozenAuditScore(latest),prevScore=frozenAuditScore(prev);
+  return {score:score,prevScore:prevScore,audit:latest,prev:prev,delta:(typeof score==='number'&&typeof prevScore==='number')?score-prevScore:null};
+}
+function latestDeptAuditScoreAt(deptCode,monthEnd){
+  var audits=completedAuditsSorted(deptCode).filter(function(a){var d=parseAuditDate(a.submittedAt||a.date);return d&&d<=monthEnd;});
+  if(!audits.length)return null;
+  return frozenAuditScore(audits[audits.length-1]);
+}
+function orgLatestAuditScore(depts){
+  var scores=(depts||APP.depts).map(function(d){var s=latestDeptAuditScore(d.code);return s&&typeof s.score==='number'?s.score:null;}).filter(function(v){return v!==null;});
+  if(!scores.length)return null;
+  return Math.round(scores.reduce(function(sum,v){return sum+v;},0)/scores.length);
+}
+function parseAuditDate(value,yr){
+  if(!value)return null;
+  if(value instanceof Date&&!isNaN(value))return value;
+  if(typeof value==='number'){var n=new Date(value);return isNaN(n)?null:n;}
+  var s=String(value).trim();if(!s)return null;
+  var dm=s.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})$/);
+  if(dm){var y=+dm[3];if(y<100)y+=2000;var dd=new Date(y,+dm[2]-1,+dm[1]);return isNaN(dd)?null:dd;}
+  if(!/\d{4}/.test(s)&&/[A-Za-z]/.test(s)){
+    var named=new Date(s+' '+(yr||new Date().getFullYear()));
+    if(!isNaN(named))return named;
+  }
+  var d=new Date(s);if(!isNaN(d))return d;
+  d=new Date(s+' '+(yr||new Date().getFullYear()));return isNaN(d)?null:d;
+}
+function findingRaisedDate(f,yr){
+  return parseAuditDate(f.createdAt||f.submittedAt||f.auditSubmittedAt||f.date,yr)||parseAuditDate(f.due,yr);
+}
+function findingClosedDate(f,yr){
+  return parseAuditDate(f.decisionDate||f.closureDate||f.closedAt,yr);
+}
+function cumulativeClosureRateAt(findings,deptCode,monthEnd,yr){
+  var rows=(findings||[]).filter(function(f){
+    if(deptCode&&f.dept!==deptCode)return false;
+    var raised=findingRaisedDate(f,yr);
+    return raised&&raised<=monthEnd;
+  });
+  if(!rows.length)return null;
+  var closed=rows.filter(function(f){
+    if(f.status!=='closed')return false;
+    var closedAt=findingClosedDate(f,yr);
+    return !closedAt||closedAt<=monthEnd;
+  }).length;
+  return Math.round(closed/rows.length*100);
 }
 function badge(cls,text){return`<span class="badge ${cls}">${text}</span>`;}
 function el(id){return document.getElementById(id);}
@@ -1810,10 +1891,11 @@ function buildDeptReportAttachment(code){
   if(!window.jspdf)return Promise.resolve(null);
   const d=APP.depts.find(x=>x.code===code)||{name:code};
   const df=reportFindingsForDept(code);
-  const score=auditScore(df);
+  const scoreInfo=latestDeptAuditScore(code);
+  const score=scoreInfo&&typeof scoreInfo.score==='number'?scoreInfo.score:null;
   const{jsPDF}=window.jspdf;const doc=new jsPDF();
   doc.setFont('helvetica','bold');doc.setFontSize(14);doc.text('OnePWS Audit Report - '+d.name,14,18);
-  doc.setFont('helvetica','normal');doc.setFontSize(9);doc.text('Compliance: '+score+'% | Findings: '+df.length+' | Date: '+new Date().toLocaleDateString('en-IN'),14,26);
+  doc.setFont('helvetica','normal');doc.setFontSize(9);doc.text('Audit Score: '+(score===null?'N/A':score+'%')+' | Findings: '+df.length+' | Date: '+new Date().toLocaleDateString('en-IN'),14,26);
   if(doc.autoTable){
     doc.autoTable({startY:34,head:[['ID','Description','Severity','Status']],body:df.map(f=>[f.ref,f.desc,SEV_LABEL[f.sev]||f.sev,STAT_LABEL[f.status]||f.status]),styles:{fontSize:8},headStyles:{fillColor:[192,57,43],textColor:255}});
   }
@@ -1826,13 +1908,15 @@ function buildDeptReportAttachment(code){
 function sendDeptReportEmail(code){
   const d=APP.depts.find(x=>x.code===code);if(!d)return;
   const df=filteredFindings().filter(f=>f.dept===code);
-  const score=auditScore(df);
+  const scoreInfo=latestDeptAuditScore(code);
+  const score=scoreInfo&&typeof scoreInfo.score==='number'?scoreInfo.score:null;
+  const scoreText=score===null?'N/A':score+'%';
   const to=spocEmails(code);
   const cc=[...new Set(deptManagerEmails(code).concat(deptAuditorEmails(code),masterAdminEmails()))];
   const subject='OnePWS Audit Report - '+d.name+' - '+new Date().toLocaleDateString('en-IN');
-  const text='Department: '+d.name+'\nCompliance Score: '+score+'%\nFindings: '+df.length+'\nOpen CAPA: '+df.filter(f=>f.status!=='closed').length+'\n\nPlease open OnePWS AuditPro for PDF/Excel report details.';
+  const text='Department: '+d.name+'\nAudit Score: '+scoreText+'\nFindings: '+df.length+'\nOpen CAPA: '+df.filter(f=>f.status!=='closed').length+'\n\nPlease open OnePWS AuditPro for PDF/Excel report details.';
   const rows=df.slice(0,12).map(f=>'<tr><td>'+sanitize(f.ref)+'</td><td>'+sanitize(f.desc)+'</td><td>'+sanitize(SEV_LABEL[f.sev]||f.sev)+'</td><td>'+sanitize(STAT_LABEL[f.status]||f.status)+'</td></tr>').join('');
-  const html='<h3>OnePWS Audit Report - '+sanitize(d.name)+'</h3><p><b>Compliance Score:</b> '+score+'%<br><b>Total Findings:</b> '+df.length+'</p><table border="1" cellpadding="6" cellspacing="0"><thead><tr><th>ID</th><th>Description</th><th>Severity</th><th>Status</th></tr></thead><tbody>'+(rows||'<tr><td colspan="4">No findings</td></tr>')+'</tbody></table>';
+  const html='<h3>OnePWS Audit Report - '+sanitize(d.name)+'</h3><p><b>Audit Score:</b> '+scoreText+'<br><b>Total Findings:</b> '+df.length+'</p><table border="1" cellpadding="6" cellspacing="0"><thead><tr><th>ID</th><th>Description</th><th>Severity</th><th>Status</th></tr></thead><tbody>'+(rows||'<tr><td colspan="4">No findings</td></tr>')+'</tbody></table>';
   return buildDeptReportAttachment(code).then(function(att){
     const attachmentLabel=att&&att.url?att.url:'';
     const attachments=att?[{filename:att.filename,url:att.url}]:[];
@@ -1895,20 +1979,25 @@ function createAudit(){
 function renderDashboard(){
   var _allF=filterByDateRange(APP.findings,'due');var _isSpoc=APP.currentUser?.role==='spoc';var _spocDept=APP.currentUser?.dept||'';
   const F=_isSpoc?_allF.filter(f=>f.dept===_spocDept):_allF;const open=F.filter(f=>f.status!=='closed').length;
-  const deptScores=(_isSpoc?APP.depts.filter(d=>d.code===_spocDept):APP.depts).map(d=>{
+  const visibleDepts=_isSpoc?APP.depts.filter(d=>d.code===_spocDept):APP.depts;
+  const overallAuditScore=orgLatestAuditScore(visibleDepts);
+  const deptScores=visibleDepts.map(d=>{
     const df=F.filter(f=>f.dept===d.code);
     const cr=df.filter(f=>f.sev==='critical').length;
     const ma=df.filter(f=>f.sev==='major').length;
-    const mi=df.filter(f=>f.sev==='minor'||f.sev==='obs').length;
-    const cl4=df.filter(f=>f.status==='closed').length;
-    const score=df.length?Math.round(cl4/df.length*100):100;
-    return{name:d.name,score,findings:df.length,c:cr,ma,mi,code:d.code};
-  }).filter(d=>d.findings>0||d.score<100);
-  const sorted=[...deptScores].sort((a,b)=>b.score-a.score);
+    const mi=df.filter(f=>f.sev==='minor').length;
+    const ob=df.filter(f=>f.sev==='obs'||f.sev==='observation').length;
+    const scoreInfo=latestDeptAuditScore(d.code);
+    const score=scoreInfo&&typeof scoreInfo.score==='number'?scoreInfo.score:null;
+    const closed=df.filter(f=>f.status==='closed').length;
+    const inprog=df.filter(f=>f.status==='in-progress'||f.status==='pending-closure').length;
+    return{name:d.name,score,scoreInfo,findings:df.length,open:df.filter(f=>f.status!=='closed').length,inprog,closed,cr:closureRate(df),c:cr,ma,mi,ob,code:d.code};
+  }).filter(d=>d.findings>0||d.score!==null);
+  const sorted=[...deptScores].filter(d=>d.score!==null).sort((a,b)=>b.score-a.score);
   const top5=sorted.slice(0,5);const bot5=sorted.slice(-5).reverse();
   return`
   <div class="grid g4 sg">
-    <div class="stat"><div class="sl">Audit Score</div><div class="sv" style="color:var(--${auditScore(F)>=80?'green':auditScore(F)>=60?'amber':'red'})">${auditScore(F)}%</div><div class="sd">ISO Weighted Deduction</div></div>
+    <div class="stat"><div class="sl">Audit Score</div><div class="sv" style="color:var(--${overallAuditScore===null?'text3':auditScoreColor(overallAuditScore)})">${overallAuditScore===null?'N/A':overallAuditScore+'%'}</div><div class="sd">Latest frozen audit avg.</div></div>
     <div class="stat"><div class="sl">Open Findings</div><div class="sv" style="color:var(--amber)">${open}</div><div class="sd dd">${F.filter(f=>f.sev==='critical'&&f.status!=='closed').length} critical</div></div>
     <div class="stat"><div class="sl">Closure Rate</div><div class="sv" style="color:var(--${closureRate(F)>=90?'green':closureRate(F)>=60?'amber':'red'})">${closureRate(F)}%</div><div class="sd">Target 90%</div></div>
     <div class="stat"><div class="sl">Completed Audits</div><div class="sv">${(LS.get('ap_completed_audits',[])||[]).length}</div><div class="sd du">Total to date</div></div>
@@ -1925,9 +2014,9 @@ function renderDashboard(){
             <td style="color:var(--red);font-weight:${d.open?800:400}">${d.open||'—'}</td>
             <td style="color:var(--amber);font-weight:${d.inprog?800:400}">${d.inprog||'—'}</td>
             <td style="color:var(--green);font-weight:${d.closed?800:400}">${d.closed||'—'}</td>
-            <td style="color:var(--${d.score>=80?'green':d.score>=60?'amber':'red'});font-weight:800">${d.score}%</td>
+            <td style="color:var(--${d.score===null?'text3':auditScoreColor(d.score)});font-weight:800">${d.score===null?'N/A':d.score+'%'}${d.scoreInfo&&d.scoreInfo.delta!==null?` <span class="txx" title="Previous: ${d.scoreInfo.prevScore}%">${d.scoreInfo.delta>0?'▲':d.scoreInfo.delta<0?'▼':'→'}${Math.abs(d.scoreInfo.delta)}</span>`:''}</td>
             <td style="color:var(--${d.cr>=90?'green':d.cr>=60?'amber':'red'})">${d.cr}%</td>
-            <td>${badge(d.score>=80?'b-green':d.score>=60?'b-amber':'b-red',d.score>=80?'Compliant':d.score>=60?'At Risk':'Non-Compliant')}</td>
+            <td>${d.score===null?badge('b-gray','Not Audited'):badge(auditScoreBadge(d.score),auditScoreStatus(d.score))}</td>
             <td><button class="btn btn-ghost btn-sm" onclick="APP.findingsDeptFilter='${d.code}';navigate('findings')">→</button></td>
           </tr>`).join('')}
           ${deptScores.length?`<tr style="border-top:2px solid var(--border);font-weight:900;background:var(--bg3);">
@@ -1936,7 +2025,7 @@ function renderDashboard(){
             <td style="color:var(--red)">${deptScores.reduce((s,d)=>s+d.open,0)}</td>
             <td style="color:var(--amber)">${deptScores.reduce((s,d)=>s+d.inprog,0)}</td>
             <td style="color:var(--green)">${deptScores.reduce((s,d)=>s+d.closed,0)}</td>
-            <td style="color:var(--brand)">${auditScore(F)}%</td>
+            <td style="color:var(--brand)">${overallAuditScore===null?'N/A':overallAuditScore+'%'}</td>
             <td style="color:var(--brand)">${closureRate(F)}%</td>
             <td colspan="2"></td>
           </tr>`:''}
@@ -2117,7 +2206,7 @@ function renderAnalytics(){
   const delayed=F.filter(f=>f.status==='delayed').length;
   const repeat=F.filter(f=>f.type==='repeat').length;
   const capaRate=closureRate(F);
-  const overallScore=auditScore(F);
+  const overallScore=orgLatestAuditScore(depts);
   
   // Build monthly data
   const now=new Date();const yr=now.getFullYear();
@@ -2127,14 +2216,19 @@ function renderAnalytics(){
   function getMonthlyData(deptCode){
     var data=[];
     for(var m=0;m<12;m++){
-        var mFinds=filteredFindings().filter(function(f){
+      var monthEnd=new Date(yr,m+1,0,23,59,59,999);
+      var mFinds=filteredFindings().filter(function(f){
         if(deptCode&&f.dept!==deptCode)return false;
-        var d=new Date(f.due||f.date);
-        return d.getFullYear()===yr&&d.getMonth()===m;
+        var raised=findingRaisedDate(f,yr);
+        return raised&&raised<=monthEnd;
       });
-      var cl=mFinds.filter(function(f){return f.status==='closed';}).length;
-      var cr=mFinds.length?Math.round(cl/mFinds.length*100):null;
-      var as=mFinds.length?auditScore(mFinds):null;
+      var cl=mFinds.filter(function(f){
+        if(f.status!=='closed')return false;
+        var closedAt=findingClosedDate(f,yr);
+        return !closedAt||closedAt<=monthEnd;
+      }).length;
+      var cr=cumulativeClosureRateAt(filteredFindings(),deptCode,monthEnd,yr);
+      var as=latestDeptAuditScoreAt(deptCode,monthEnd);
       data.push({month:months[m],total:mFinds.length,closed:cl,cr:cr,auditScore:as});
     }
     return data;
@@ -2185,7 +2279,7 @@ function renderAnalytics(){
   
   return`
   <div class="kpis sg">
-    ${[['Total Findings',''+F.length,'brand'],['Open',''+F.filter(f=>f.status!=='closed').length,'red'],['Audit Score',''+overallScore+'%',overallScore>=80?'green':overallScore>=60?'amber':'red'],['Closure Rate',''+capaRate+'%',capaRate>=90?'green':capaRate>=60?'amber':'red'],['Closed',''+closed,'green']].map(([l,v,c])=>`
+    ${[['Total Findings',''+F.length,'brand'],['Open',''+F.filter(f=>f.status!=='closed').length,'red'],['Audit Score',overallScore===null?'N/A':overallScore+'%',overallScore===null?'text3':auditScoreColor(overallScore)],['Closure Rate',''+capaRate+'%',capaRate>=90?'green':capaRate>=60?'amber':'red'],['Closed',''+closed,'green']].map(([l,v,c])=>`
     <div class="kpib"><div class="kpiv" style="color:var(--${c})">${v}</div><div class="kpil">${l}</div></div>`).join('')}
   </div>
   <div class="grid g3 sg">
@@ -2201,7 +2295,7 @@ function renderAnalytics(){
       ${[['Critical',F.filter(f=>f.sev==='critical').length,'red'],['Major',F.filter(f=>f.sev==='major').length,'amber'],['Minor',F.filter(f=>f.sev==='minor').length,'teal'],['Observation',F.filter(f=>f.sev==='obs'||f.sev==='observation').length,'purple']].map(([l,n,cl])=>`
         <div class="fb txs mb1"><span>${l}</span><span style="color:var(--${cl});font-weight:800">${n} (Deduction: ${l==='Critical'?n*15:l==='Major'?n*10:l==='Minor'?n*5:n*2}pts)</span></div>
         <div class="prog mb2"><div class="pf" style="width:${F.length?Math.min(100,n/F.length*100):0}%;background:var(--${cl})"></div></div>`).join('')}
-      <div class="txs td mt1" style="background:var(--bg3);padding:6px 8px;border-radius:6px;"><strong>Audit Score Formula:</strong> 100 − (Critical×15) − (Major×10) − (Minor×5) − (Obs×2) = <strong style="color:var(--${overallScore>=80?'green':overallScore>=60?'amber':'red'})">${overallScore}%</strong></div>
+      <div class="txs td mt1" style="background:var(--bg3);padding:6px 8px;border-radius:6px;"><strong>Audit Score Formula:</strong> frozen at audit submit: 100 − (Critical×15) − (Major×10) − (Minor×5) − (Obs×2) = <strong style="color:var(--${overallScore===null?'text3':auditScoreColor(overallScore)})">${overallScore===null?'N/A':overallScore+'%'}</strong></div>
     </div>
     <div class="card">
       <div class="ch"><span class="dot" style="background:var(--red)"></span>Dept Delay Insights</div>
@@ -2213,7 +2307,7 @@ function renderAnalytics(){
     </div>
   </div>
   <div class="card sg">
-    <div class="ch fb"><div class="flex g2u"><span class="dot" style="background:var(--teal)"></span>Monthly Closure Rate Trend — ${yr}</div><div class="txs td">▲ = Improved from previous month &nbsp; ▼ = Declined</div></div>
+    <div class="ch fb"><div class="flex g2u"><span class="dot" style="background:var(--teal)"></span>Monthly Closure Rate Trend — ${yr}</div><div class="txs td">Closed till month-end ÷ findings raised till month-end</div></div>
     ${buildClosureTrend()}
   </div>
   <div class="card sg">
@@ -2254,6 +2348,8 @@ function exportAnalyticsPDF(){
   var jsPDF=window.jspdf.jsPDF;var doc=new jsPDF();var pw=doc.internal.pageSize.getWidth();
   var _baseFindingsPdf=filteredFindings();
   var F=APP.currentUser?.role==='spoc'?_baseFindingsPdf.filter(f=>f.dept===APP.currentUser?.dept):_baseFindingsPdf;
+  var depts=APP.currentUser?.role==='spoc'?APP.depts.filter(d=>d.code===APP.currentUser?.dept):APP.depts;
+  var overallScore=orgLatestAuditScore(depts);
   doc.setFillColor(192,57,43);doc.rect(0,0,pw,26,'F');
   doc.setTextColor(255);doc.setFontSize(13);doc.setFont('helvetica','bold');
   doc.text('OnePWS Pvt. Ltd. — Analytics & KPI Report',pw/2,16,{align:'center'});
@@ -2261,13 +2357,12 @@ function exportAnalyticsPDF(){
   doc.autoTable({startY:30,head:[['KPI','Value']],body:[
     ['Total Findings',''+F.length],
     ['Open',''+F.filter(f=>f.status!=='closed').length],
-    ['Audit Score',auditScore(F)+'%'],
+    ['Audit Score',overallScore===null?'N/A':overallScore+'%'],
     ['Closure Rate',closureRate(F)+'%'],
     ['Closed',''+F.filter(f=>f.status==='closed').length]
   ],styles:{fontSize:9},headStyles:{fillColor:[192,57,43],textColor:255},margin:{left:14,right:14}});
-  var depts=APP.currentUser?.role==='spoc'?APP.depts.filter(d=>d.code===APP.currentUser?.dept):APP.depts;
   doc.autoTable({startY:doc.lastAutoTable.finalY+8,head:[['Department','Total','Open','Closed','Audit Score','Closure %']],
-    body:depts.filter(d=>F.some(f=>f.dept===d.code)).map(d=>{var df=F.filter(f=>f.dept===d.code);return[d.name,df.length,df.filter(f=>f.status!=='closed').length,df.filter(f=>f.status==='closed').length,auditScore(df)+'%',closureRate(df)+'%'];}),
+    body:depts.filter(d=>F.some(f=>f.dept===d.code)||latestDeptAuditScore(d.code)).map(d=>{var df=F.filter(f=>f.dept===d.code);var s=latestDeptAuditScore(d.code);return[d.name,df.length,df.filter(f=>f.status!=='closed').length,df.filter(f=>f.status==='closed').length,(s&&typeof s.score==='number')?s.score+'%':'N/A',closureRate(df)+'%'];}),
     styles:{fontSize:9},headStyles:{fillColor:[37,99,235],textColor:255},margin:{left:14,right:14}});
   doc.setFontSize(7);doc.setTextColor(150);doc.text('OnePWS Pvt. Ltd. | Analytics | '+new Date().toLocaleString(),pw/2,287,{align:'center'});
   doc.save('OnePWS_Analytics_'+Date.now()+'.pdf');showToast('PDF downloaded!');
@@ -2277,10 +2372,11 @@ function exportAnalyticsExcel(){
   var _baseFindingsXls=filteredFindings();
   var F=APP.currentUser?.role==='spoc'?_baseFindingsXls.filter(f=>f.dept===APP.currentUser?.dept):_baseFindingsXls;
   var depts=APP.currentUser?.role==='spoc'?APP.depts.filter(d=>d.code===APP.currentUser?.dept):APP.depts;
+  var overallScore=orgLatestAuditScore(depts);
   var wb=XLSX.utils.book_new();
-  var kpiData=[{KPI:'Total Findings',Value:F.length},{KPI:'Open',Value:F.filter(f=>f.status!=='closed').length},{KPI:'Audit Score',Value:auditScore(F)+'%'},{KPI:'Closure Rate',Value:closureRate(F)+'%'},{KPI:'Closed',Value:F.filter(f=>f.status==='closed').length}];
+  var kpiData=[{KPI:'Total Findings',Value:F.length},{KPI:'Open',Value:F.filter(f=>f.status!=='closed').length},{KPI:'Audit Score',Value:overallScore===null?'N/A':overallScore+'%'},{KPI:'Closure Rate',Value:closureRate(F)+'%'},{KPI:'Closed',Value:F.filter(f=>f.status==='closed').length}];
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(kpiData),'KPIs');
-  var deptData=depts.filter(d=>F.some(f=>f.dept===d.code)).map(d=>{var df=F.filter(f=>f.dept===d.code);return{Department:d.name,Total:df.length,Open:df.filter(f=>f.status!=='closed').length,Closed:df.filter(f=>f.status==='closed').length,AuditScore:auditScore(df)+'%',ClosureRate:closureRate(df)+'%'};});
+  var deptData=depts.filter(d=>F.some(f=>f.dept===d.code)||latestDeptAuditScore(d.code)).map(d=>{var df=F.filter(f=>f.dept===d.code);var s=latestDeptAuditScore(d.code);return{Department:d.name,Total:df.length,Open:df.filter(f=>f.status!=='closed').length,Closed:df.filter(f=>f.status==='closed').length,AuditScore:(s&&typeof s.score==='number')?s.score+'%':'N/A',ClosureRate:closureRate(df)+'%'};});
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(deptData),'Departments');
   var ncSev={critical:1,major:1,minor:1};
   var clauseMap={};
@@ -2297,7 +2393,7 @@ function exportAnalyticsExcel(){
   var clauseData=Object.values(clauseMap).sort(function(a,b){return b.NCCount-a.NCCount||a.ClauseName.localeCompare(b.ClauseName);}).slice(0,10);
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(clauseData),'Recurring Clauses');
   var months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];var yr=new Date().getFullYear();
-  var monthlyData=depts.filter(d=>F.some(f=>f.dept===d.code)).map(d=>{var row={Department:d.name};months.forEach(function(mn,mi){var mf=filteredFindings().filter(function(f){return f.dept===d.code&&new Date(f.due||f.date).getFullYear()===yr&&new Date(f.due||f.date).getMonth()===mi;});row[mn+'_Score']=mf.length?auditScore(mf)+'%':'—';row[mn+'_Closure']=mf.length?closureRate(mf)+'%':'—';});return row;});
+  var monthlyData=depts.filter(d=>F.some(f=>f.dept===d.code)||latestDeptAuditScore(d.code)).map(d=>{var row={Department:d.name};months.forEach(function(mn,mi){var monthEnd=new Date(yr,mi+1,0,23,59,59,999);var s=latestDeptAuditScoreAt(d.code,monthEnd);var cr=cumulativeClosureRateAt(filteredFindings(),d.code,monthEnd,yr);row[mn+'_Score']=s!==null?s+'%':'—';row[mn+'_Closure']=cr!==null?cr+'%':'—';});return row;});
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(monthlyData),'Monthly Trends');
   XLSX.writeFile(wb,'OnePWS_Analytics_'+Date.now()+'.xlsx');showToast('Excel exported!');
 }
@@ -2860,13 +2956,14 @@ function genReportCards(depts){
     const c=df.filter(f=>f.sev==='critical').length;
     const ma=df.filter(f=>f.sev==='major').length;
     const mi=df.filter(f=>f.sev==='minor').length;
-    const score=auditScore(df);
-    const sc=score>=90?'green':score>=75?'amber':'red';
+    const scoreInfo=latestDeptAuditScore(d.code);
+    const score=scoreInfo&&typeof scoreInfo.score==='number'?scoreInfo.score:null;
+    const sc=score===null?'text3':auditScoreColor(score);
     return`<div class="card" style="cursor:pointer;" onclick="showDeptReport('${d.code}')">
       <div class="fb mb2">${badge(c>0?'b-red':ma>0?'b-amber':'b-green',c>0?'Critical':ma>0?'Major':'Compliant')}<span class="txx td">${d.lastAudit||'Not audited'}</span></div>
       <div class="f7 tsm">${d.name}</div>
       <div class="txs tm mt1">${d.spoc} · ${df.length} finding(s)</div>
-      <div class="fb mt2"><span style="font-size:18px;font-weight:900;color:var(--${sc})">${score}%</span><div class="flex g2u txs"><span style="color:var(--red)">${c}C</span><span style="color:var(--amber)">${ma}M</span><span style="color:var(--teal)">${mi}m</span></div></div>
+      <div class="fb mt2"><span style="font-size:18px;font-weight:900;color:var(--${sc})">${score===null?'N/A':score+'%'}</span><div class="flex g2u txs"><span style="color:var(--red)">${c}C</span><span style="color:var(--amber)">${ma}M</span><span style="color:var(--teal)">${mi}m</span></div></div>
       <div style="margin-top:9px;padding-top:9px;border-top:1px solid var(--border);display:flex;gap:5px;">
         <button class="btn btn-ghost btn-sm" style="flex:1" onclick="event.stopPropagation();genDeptPDF('${d.code}')">📄 PDF</button>
         <button class="btn btn-ghost btn-sm" style="flex:1" onclick="event.stopPropagation();genDeptExcel('${d.code}')">📊 Excel</button>
@@ -2878,7 +2975,8 @@ function showDeptReport(code){
   const d=APP.depts.find(x=>x.code===code);if(!d)return;
   const df=reportFindingsForDept(code);
   const c=df.filter(f=>f.sev==='critical').length,ma=df.filter(f=>f.sev==='major').length,mi=df.filter(f=>f.sev==='minor').length;
-  const score=auditScore(df),sc=score>=80?'green':score>=60?'amber':'red';
+  const scoreInfo=latestDeptAuditScore(code);
+  const score=scoreInfo&&typeof scoreInfo.score==='number'?scoreInfo.score:null,sc=score===null?'text3':auditScoreColor(score);
   const stds=APP.standards.map(id=>AUDIT_STANDARDS.find(s=>s.id===id)?.label||id).join(' + ');
   const rp=el('report-preview');rp.className='card sg';
   rp.innerHTML=`
@@ -2886,7 +2984,7 @@ function showDeptReport(code){
     <div><div class="f7" style="font-size:14px;">INTERNAL QUALITY AUDIT REPORT</div><div class="txs td mt1">OnePWS Pvt. Ltd. · ${d.name} · ${stds}</div></div>
     <div style="text-align:right;"><div class="txs td">SPOC: ${d.spoc}</div><div class="txs td">Last: ${d.lastAudit||'—'}</div><div class="txs td">${new Date().toLocaleDateString()}</div></div>
   </div>
-  <div class="grid g4 mb3" style="gap:9px;">${[['Compliance',score+'%',sc],['Critical',c,'red'],['Major',ma,'amber'],['Minor',mi,'teal']].map(([l,v,col])=>`<div style="text-align:center;background:var(--bg3);border-radius:7px;padding:9px;"><div style="font-size:20px;font-weight:900;color:var(--${col})">${v}</div><div class="txx td">${l}</div></div>`).join('')}</div>
+  <div class="grid g4 mb3" style="gap:9px;">${[['Audit Score',score===null?'N/A':score+'%',sc],['Critical',c,'red'],['Major',ma,'amber'],['Minor',mi,'teal']].map(([l,v,col])=>`<div style="text-align:center;background:var(--bg3);border-radius:7px;padding:9px;"><div style="font-size:20px;font-weight:900;color:var(--${col})">${v}</div><div class="txx td">${l}</div></div>`).join('')}</div>
   <div class="ch"><span class="dot" style="background:var(--green)"></span>Full Audit Checklist Results</div>
   ${(function(){
     const cas=LS.get('ap_completed_audits',[])||[];
@@ -2953,7 +3051,9 @@ function genDeptPDF(code){
   const ma=df.filter(f=>f.sev==='major').length;
   const mi=df.filter(f=>f.sev==='minor').length;
   const ob=df.filter(f=>f.sev==='observation').length;
-  var score=auditScore(df);
+  var scoreInfo=latestDeptAuditScore(code);
+  var score=scoreInfo&&typeof scoreInfo.score==='number'?scoreInfo.score:null;
+  var scoreBox=score===null?{bg:[245,247,251],fg:[139,146,168]}:(score>=80?{bg:[220,252,244],fg:[22,163,74]}:score>=60?{bg:[255,251,235],fg:[217,119,6]}:{bg:[254,242,242],fg:[220,38,38]});
   const closed=df.filter(f=>f.status==='closed').length;
   const stds=(APP.standards||['AS9100D']).map(function(id){var s=AUDIT_STANDARDS.find(function(x){return x.id===id;});return s?s.label:id;}).join(', ');
   // ── HEADER ──
@@ -2968,7 +3068,7 @@ function genDeptPDF(code){
   doc.setTextColor(30,30,50);
   var bx=14,by=34,bw=42,bh=20;
   var boxes=[
-    {val:score+'%',lbl:'COMPLIANCE',bg:score>=90?[220,252,244]:score>=75?[255,251,235]:[254,242,242],fg:score>=90?[22,163,74]:score>=75?[217,119,6]:[220,38,38]},
+    {val:score===null?'N/A':score+'%',lbl:'AUDIT SCORE',bg:scoreBox.bg,fg:scoreBox.fg},
     {val:String(c_),lbl:'CRITICAL',bg:[254,242,242],fg:[220,38,38]},
     {val:String(ma),lbl:'MAJOR',bg:[255,251,235],fg:[217,119,6]},
     {val:String(mi),lbl:'MINOR',bg:[240,253,250],fg:[13,148,136]}
@@ -3656,7 +3756,7 @@ function emailTpl(type){return (APP.emailTemplates||[]).find(t=>t.type===type&&t
 function renderEmailMaster(canEdit){
   const q=(APP.emailSearch||'').toLowerCase();
   const rows=(APP.emailMaster||[]).filter(r=>!q||[r.spocName,r.email,r.department,r.deptCode,r.reportingName,r.reportingEmail,r.hodEmail,r.managementEmail].join(' ').toLowerCase().includes(q));
-  return `<div class="grid g21 sg"><div class="card"><div class="fb mb2"><div class="ch" style="margin:0"><span class="dot" style="background:var(--brand)"></span>Email Master (${rows.length})</div><div class="flex g2u">${canEdit?`<button class="btn btn-ghost btn-sm" onclick="downloadEmailSample()">Download Template</button><button class="btn btn-primary btn-sm" onclick="el('em-import')?.click()">Import</button>`:''}<input type="file" id="em-import" accept=".csv,.xlsx" style="display:none" onchange="importEmailMaster(event)"></div></div><div class="mb2"><input placeholder="Search SPOC, department or email..." value="${sanitize(APP.emailSearch||'')}" oninput="APP.emailSearch=this.value;renderMdBody()"></div><div class="tw"><table><thead><tr><th>SPOC</th><th>Email</th><th>Department</th><th>Manager</th><th>HOD/BUH</th><th>Management</th><th>Status</th>${canEdit?'<th>Actions</th>':''}</tr></thead><tbody>${rows.map(r=>`<tr><td class="pr">${sanitize(r.spocName)}</td><td>${sanitize(r.email)}</td><td>${sanitize(r.department||r.deptCode)}</td><td>${sanitize(r.reportingName)}<div class="txx td">${sanitize(r.reportingEmail)}</div></td><td>${sanitize(r.hodEmail||'-')}</td><td>${sanitize(r.managementEmail||'-')}</td><td>${badge(r.status==='active'?'b-green':'b-gray',r.status==='active'?'Active':'Inactive')}</td>${canEdit?`<td class="flex g1u"><button class="btn btn-ghost btn-sm" onclick="editEmailMaster('${r.id}')">Edit</button><button class="btn btn-danger btn-sm" onclick="deleteEmailMaster('${r.id}')">Delete</button></td>`:''}</tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:12px;">No email records</td></tr>'}</tbody></table></div></div><div class="card"><div class="ch"><span class="dot" style="background:var(--teal)"></span>${canEdit?'Add / Edit':'Scheduler'}</div>${canEdit?emailMasterForm():''}<div class="mt3" style="border-top:1px solid var(--border);padding-top:12px;"><div class="ch"><span class="dot" style="background:var(--amber)"></span>Automation Runs</div><div class="flex g2u fw"><button class="btn btn-ghost btn-sm" onclick="runEmailScheduler('upcoming')">Upcoming 5 Days</button><button class="btn btn-ghost btn-sm" onclick="runEmailScheduler('delayed')">Delayed NCs</button><button class="btn btn-brand btn-sm" onclick="runEmailScheduler('escalation')">Weekly Escalation</button></div><div class="txs td mt2">Summary emails are grouped by department and observations are excluded.</div></div></div></div>`;
+  return `<div class="grid g21 sg"><div class="card"><div class="fb mb2"><div class="ch" style="margin:0"><span class="dot" style="background:var(--brand)"></span>Email Master (${rows.length})</div><div class="flex g2u">${canEdit?`<button class="btn btn-ghost btn-sm" onclick="downloadEmailSample()">Download Template</button><button class="btn btn-primary btn-sm" onclick="el('em-import')?.click()">Import</button>`:''}<input type="file" id="em-import" accept=".csv,.xlsx" style="display:none" onchange="importEmailMaster(event)"></div></div><div class="mb2"><input placeholder="Search SPOC, department or email..." value="${sanitize(APP.emailSearch||'')}" oninput="APP.emailSearch=this.value;renderMdBody()"></div><div class="tw"><table><thead><tr><th>SPOC</th><th>Email</th><th>Department</th><th>Manager</th><th>HOD/BUH</th><th>Management</th><th>Status</th>${canEdit?'<th>Actions</th>':''}</tr></thead><tbody>${rows.map(r=>`<tr><td class="pr">${sanitize(r.spocName)}</td><td>${sanitize(r.email)}</td><td>${sanitize(r.department||r.deptCode)}</td><td>${sanitize(r.reportingName)}<div class="txx td">${sanitize(r.reportingEmail)}</div></td><td>${sanitize(r.hodEmail||'-')}</td><td>${sanitize(r.managementEmail||'-')}</td><td>${badge(r.status==='active'?'b-green':'b-gray',r.status==='active'?'Active':'Inactive')}</td>${canEdit?`<td class="flex g1u"><button class="btn ${APP.editEmailRecord&&APP.editEmailRecord.id===r.id?'btn-primary':'btn-ghost'} btn-sm" onclick="editEmailMaster('${sanitize(r.id)}')">Edit</button><button class="btn btn-danger btn-sm" onclick="deleteEmailMaster('${sanitize(r.id)}')">Delete</button></td>`:''}</tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:12px;">No email records</td></tr>'}</tbody></table></div></div><div class="card" id="email-master-form-card"><div class="ch"><span class="dot" style="background:var(--teal)"></span>${canEdit?(APP.editEmailRecord?'Edit Email Record':'Add Email Record'):'Scheduler'}</div>${canEdit?emailMasterForm():''}<div class="mt3" style="border-top:1px solid var(--border);padding-top:12px;"><div class="ch"><span class="dot" style="background:var(--amber)"></span>Automation Runs</div><div class="flex g2u fw"><button class="btn btn-ghost btn-sm" onclick="runEmailScheduler('upcoming')">Upcoming 5 Days</button><button class="btn btn-ghost btn-sm" onclick="runEmailScheduler('delayed')">Delayed NCs</button><button class="btn btn-brand btn-sm" onclick="runEmailScheduler('escalation')">Weekly Escalation</button></div><div class="txs td mt2">Summary emails are grouped by department and observations are excluded.</div></div></div></div>`;
 }
 function emailMasterForm(r){
   r=r||APP.editEmailRecord||{};
@@ -3668,7 +3768,11 @@ function saveEmailMaster(){
   const rows=APP.emailMaster;const obj={id,spocName:el('em-spoc').value.trim(),email,deptCode:el('em-dept').value,department:dept.name||el('em-dept').value,reportingName:el('em-rname').value.trim(),reportingEmail:el('em-remail').value.trim(),hodEmail:el('em-hod').value.trim(),managementEmail:el('em-mgmt').value.trim(),status:el('em-status').value,createdAt:(rows.find(x=>x.id===id)||{}).createdAt||new Date().toISOString(),updatedAt:new Date().toISOString()};
   const i=rows.findIndex(x=>x.id===id);if(i>=0)rows[i]=obj;else rows.unshift(obj);APP.emailMaster=rows;APP.editEmailRecord=null;renderMdBody();showToast('Email master saved');
 }
-function editEmailMaster(id){APP.editEmailRecord=(APP.emailMaster||[]).find(x=>x.id===id)||null;renderMdBody();}
+function editEmailMaster(id){
+  APP.editEmailRecord=(APP.emailMaster||[]).find(x=>x.id===id)||null;
+  renderMdBody();
+  setTimeout(function(){var card=el('email-master-form-card');if(card){card.scrollIntoView({behavior:'smooth',block:'start',inline:'nearest'});var first=el('em-spoc');if(first)first.focus();}},60);
+}
 function deleteEmailMaster(id){confirmAct('Delete this email master record?',()=>{APP.emailMaster=APP.emailMaster.filter(x=>x.id!==id);renderMdBody();showToast('Deleted');});}
 function downloadEmailSample(){const ws=XLSX.utils.json_to_sheet([{SPOCName:'A. Gupta',EmailID:'spoc@example.com',DepartmentName:'Stores',ReportingToName:'Manager',ReportingToEmail:'manager@example.com',HODBUHEmail:'hod@example.com',ManagementEmail:'management@example.com',Status:'Active'}]);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Email Master');XLSX.writeFile(wb,'Email_Master_Sample.xlsx');}
 function deptCodeFromName(name){
@@ -5073,12 +5177,16 @@ function submitAudit(){
   if(unanswered>0){showToast('⚠ '+unanswered+' unanswered. Mark N/A or answer all before submitting.',4000);return;}
   // Save audit findings to the Findings Register
   const F=APP.findings;const auditFindings={...AS.findings};
+  const submittedAt=new Date().toISOString();
+  const auditScoreFrozen=auditScore(Object.values(auditFindings));
+  const auditFindingCountsFrozen=auditFindingCounts(Object.values(auditFindings));
   const newFindings=[];
   Object.entries(auditFindings).forEach(([qId,f])=>{
     const cp=allQ.find(q=>q.id===qId);
     const ref=audit.dept+'-'+new Date().getFullYear()+'-'+String(F.length+newFindings.length+1).padStart(3,'0');
     const nf={id:'f_'+Date.now()+'_'+qId.slice(-6),ref:ref,dept:audit.dept,deptName:audit.deptName,
       desc:f.desc||'',sev:f.severity||'major',rc:f.rc||'',clause:String(cp?.clause||'—'),
+      createdAt:submittedAt,submittedAt:submittedAt,auditSubmittedAt:submittedAt,
       due:new Date(Date.now()+(APP.capaDueDays[f.severity]||30)*86400000).toISOString().split('T')[0],
       status:'open',type:'audit',auditId:audit.id,auditRef:audit.ref,
       capaStatus:'open',closureEvidence:'',closureFiles:f.files||[],
@@ -5090,13 +5198,13 @@ function submitAudit(){
   // Save completed audit to history
   const completedAudits=LS.get('ap_completed_audits',[])||[];
   const sessionCopy={answers:{...AS.answers},findings:{...AS.findings},notes:{...AS.notes},genNotes:AS.genNotes};
-  completedAudits.push({...audit,status:'submitted',submittedAt:new Date().toISOString(),session:sessionCopy,findingRefs:newFindings.map(f=>f.ref)});
+  completedAudits.push({...audit,status:'submitted',submittedAt:submittedAt,session:sessionCopy,findingRefs:newFindings.map(f=>f.ref),auditScoreFrozen:auditScoreFrozen,auditFindingCountsFrozen:auditFindingCountsFrozen});
   LS.set('ap_completed_audits',completedAudits);
   // Update dept last audit date
   const D=APP.depts;const dept=D.find(d=>d.code===audit.dept);
   if(dept){dept.lastAudit=new Date().toLocaleDateString('en-IN',{dateStyle:'medium'});APP.depts=D;}
   // Clear active audit and session
-  const submittedAudit={...audit,status:'submitted',submittedAt:new Date().toISOString(),session:sessionCopy};
+  const submittedAudit={...audit,status:'submitted',submittedAt:submittedAt,session:sessionCopy,findingRefs:newFindings.map(f=>f.ref),auditScoreFrozen:auditScoreFrozen,auditFindingCountsFrozen:auditFindingCountsFrozen};
   setActiveAudit(null);APP.session=null;
   addNotif('audit','Audit Submitted',audit.deptName+' audit submitted. '+newFindings.length+' finding(s) logged.','findings',['admin','auditor','spoc','viewer']);
   if(typeof sendAuditSubmissionEmail==='function')sendAuditSubmissionEmail(submittedAudit,newFindings);
@@ -5178,8 +5286,8 @@ function showAuditCompletionReport(audit,sessionData){
   const no=allQ.filter(q=>session.answers[q.id]==='no').length;
   const na=allQ.filter(q=>session.answers[q.id]==='na').length;
   const finds=Object.values(session.findings||{});
-  const score=allQ.length?Math.round(yes/(yes+no)*100):100;
-  const sc=score>=90?'green':score>=75?'amber':'red';
+  const score=typeof audit.auditScoreFrozen==='number'?audit.auditScoreFrozen:auditScore(finds);
+  const sc=auditScoreColor(score);
   mc.innerHTML='<div class="card sg" style="border:2px solid var(--brand);">'+
     '<div class="fb mb3" style="border-bottom:2px solid var(--brand);padding-bottom:11px;">'+
     '<div><div class="f7" style="font-size:16px;">AUDIT COMPLETION REPORT</div>'+
@@ -5187,7 +5295,7 @@ function showAuditCompletionReport(audit,sessionData){
     '<div style="text-align:right;"><div class="txs td">Date: '+new Date().toLocaleDateString()+'</div>'+
     '<div class="txs td">Standards: '+(audit.standards||[]).map(function(s){return STD_META[s]?.short||s;}).join(', ')+'</div></div></div>'+
     '<div class="grid g4 mb3" style="gap:9px;">'+
-    '<div style="text-align:center;background:var(--bg3);border-radius:7px;padding:12px;"><div style="font-size:22px;font-weight:900;color:var(--'+sc+')">'+score+'%</div><div class="txx td">Compliance</div></div>'+
+    '<div style="text-align:center;background:var(--bg3);border-radius:7px;padding:12px;"><div style="font-size:22px;font-weight:900;color:var(--'+sc+')">'+score+'%</div><div class="txx td">Audit Score</div></div>'+
     '<div style="text-align:center;background:var(--green-bg);border-radius:7px;padding:12px;"><div style="font-size:22px;font-weight:900;color:var(--green)">'+yes+'</div><div class="txx td">Compliant</div></div>'+
     '<div style="text-align:center;background:var(--red-bg);border-radius:7px;padding:12px;"><div style="font-size:22px;font-weight:900;color:var(--red)">'+no+'</div><div class="txx td">Non-Compliant</div></div>'+
     '<div style="text-align:center;background:var(--bg3);border-radius:7px;padding:12px;"><div style="font-size:22px;font-weight:900;">'+na+'</div><div class="txx td">N/A</div></div></div>'+
@@ -5239,8 +5347,8 @@ function downloadCompletionPDF(){
   const allQ=(audit.sections||[]).flatMap(s=>s._checkpoints||[]);
   const yes=allQ.filter(q=>sess.answers[q.id]==='yes').length;
   const no=allQ.filter(q=>sess.answers[q.id]==='no').length;
-  const score=(yes+no)?Math.round(yes/(yes+no)*100):100;
-  doc.text('Compliance Score: '+score+'%  |  Questions: '+allQ.length+'  |  Findings: '+Object.keys(sess.findings||{}).length,14,38);
+  const score=typeof audit.auditScoreFrozen==='number'?audit.auditScoreFrozen:auditScoreFromSessionFindings(sess);
+  doc.text('Audit Score: '+score+'%  |  Questions: '+allQ.length+'  |  Findings: '+Object.keys(sess.findings||{}).length,14,38);
   // Full checklist results table
   const chkRows=allQ.map(function(q,i){var ans=sess.answers?sess.answers[q.id]:'';var finding=sess.findings?sess.findings[q.id]:null;var note=sess.notes?sess.notes[q.id]||'':'';return[(i+1),q.clause||'—',q.text,ans==='yes'?'Compliant':ans==='no'?'Non-Compliant':ans==='na'?'N/A':'Skipped',(finding?finding.desc+' ':'')+note];});
   doc.autoTable({startY:44,head:[['#','Clause','Question','Result','Observation']],body:chkRows,styles:{fontSize:7,cellPadding:2,overflow:'linebreak'},headStyles:{fillColor:[37,99,235],textColor:255},margin:{left:14,right:14},columnStyles:{2:{cellWidth:55},4:{cellWidth:40}}});
