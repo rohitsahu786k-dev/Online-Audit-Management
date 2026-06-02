@@ -1555,7 +1555,7 @@ function findingRaisedDate(f,yr){
   return parseAuditDate(f.createdAt||f.submittedAt||f.auditSubmittedAt||f.date,yr)||parseAuditDate(f.due,yr);
 }
 function findingClosedDate(f,yr){
-  return parseAuditDate(f.decisionDate||f.closureDate||f.closedAt,yr);
+  return parseAuditDate(f.closedAt||f.decisionDate||f.closureDate,yr);
 }
 function cumulativeClosureRateAt(findings,deptCode,monthEnd,yr){
   var rows=(findings||[]).filter(function(f){
@@ -1570,6 +1570,13 @@ function cumulativeClosureRateAt(findings,deptCode,monthEnd,yr){
     return !closedAt||closedAt<=monthEnd;
   }).length;
   return Math.round(closed/rows.length*100);
+}
+function closureTrendDeptHasData(findings,deptCode,yr){
+  return (findings||[]).some(function(f){
+    if(deptCode&&f.dept!==deptCode)return false;
+    var raised=findingRaisedDate(f,yr),closed=findingClosedDate(f,yr);
+    return (raised&&raised.getFullYear()<=yr)||(closed&&closed.getFullYear()===yr);
+  });
 }
 function badge(cls,text){return`<span class="badge ${cls}">${text}</span>`;}
 function el(id){return document.getElementById(id);}
@@ -2337,19 +2344,25 @@ function renderAnalytics(){
     var data=[];
     for(var m=0;m<12;m++){
       var monthEnd=new Date(yr,m+1,0,23,59,59,999);
+      var isFutureMonth=yr>now.getFullYear()||(yr===now.getFullYear()&&m>now.getMonth());
       var auditThisMonth=latestDeptAuditInMonth(deptCode,yr,m);
-      var asOfDate=auditThisMonth?monthEnd:null;
-      var mFinds=auditThisMonth?trendFindings.filter(function(f){
+      var hasClosureData=!isFutureMonth&&trendFindings.some(function(f){
+        if(deptCode&&f.dept!==deptCode)return false;
+        var raised=findingRaisedDate(f,yr);
+        return raised&&raised<=monthEnd;
+      });
+      var asOfDate=hasClosureData?monthEnd:null;
+      var mFinds=hasClosureData?trendFindings.filter(function(f){
         if(deptCode&&f.dept!==deptCode)return false;
         var raised=findingRaisedDate(f,yr);
         return raised&&raised<=asOfDate;
       }):[];
-      var cl=auditThisMonth?mFinds.filter(function(f){
+      var cl=hasClosureData?mFinds.filter(function(f){
         if(f.status!=='closed')return false;
         var closedAt=findingClosedDate(f,yr);
         return !closedAt||closedAt<=asOfDate;
       }).length:0;
-      var cr=auditThisMonth?cumulativeClosureRateAt(trendFindings,deptCode,asOfDate,yr):null;
+      var cr=hasClosureData?cumulativeClosureRateAt(trendFindings,deptCode,asOfDate,yr):null;
       var as=auditThisMonth?frozenAuditScore(auditThisMonth):null;
       data.push({month:months[m],total:mFinds.length,closed:cl,cr:cr,auditScore:as});
     }
@@ -2358,7 +2371,7 @@ function renderAnalytics(){
   
   // Build closure rate trend table (month-over-month change)
   function buildClosureTrend(){
-    var rows=depts.filter(function(d){return deptHasAuditInYear(d.code,yr);}).map(function(d){
+    var rows=depts.filter(function(d){return closureTrendDeptHasData(trendFindings,d.code,yr)||deptHasAuditInYear(d.code,yr);}).map(function(d){
       var md=getMonthlyData(d.code);
       var cells='';
       for(var m=0;m<12;m++){
@@ -2378,7 +2391,7 @@ function renderAnalytics(){
       }
       return '<tr><td class="pr" style="white-space:nowrap;">'+d.name+'</td>'+cells+'</tr>';
     });
-    if(!rows.length)return '<div class="txs td">No submitted audits yet — monthly closure rates will appear after audit submission.</div>';
+    if(!rows.length)return '<div class="txs td">No findings yet - monthly closure rates will appear after findings are raised.</div>';
     return '<div class="tw"><table style="font-size:11px;"><thead><tr><th>Department</th>'+months.map(function(m){return '<th style="text-align:center;">'+m+'</th>';}).join('')+'</tr></thead><tbody>'+rows.join('')+'</tbody></table></div>';
   }
   
@@ -2429,7 +2442,7 @@ function renderAnalytics(){
     </div>
   </div>
   <div class="card sg">
-    <div class="ch fb"><div class="flex g2u"><span class="dot" style="background:var(--teal)"></span>Monthly Closure Rate Trend — ${yr}</div><div class="txs td">Only audit months · closed till month-end ÷ findings raised till month-end</div></div>
+    <div class="ch fb"><div class="flex g2u"><span class="dot" style="background:var(--teal)"></span>Monthly Closure Rate Trend — ${yr}</div><div class="txs td">Closed till month-end / findings raised till month-end</div></div>
     ${buildClosureTrend()}
   </div>
   <div class="card sg">
@@ -2515,8 +2528,8 @@ function exportAnalyticsExcel(){
   });
   var clauseData=Object.values(clauseMap).sort(function(a,b){return b.NCCount-a.NCCount||a.ClauseName.localeCompare(b.ClauseName);}).slice(0,10);
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(clauseData),'Recurring Clauses');
-  var months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];var yr=new Date().getFullYear();
-  var monthlyData=depts.filter(d=>deptHasAuditInYear(d.code,yr)).map(d=>{var row={Department:d.name};months.forEach(function(mn,mi){var monthEnd=new Date(yr,mi+1,0,23,59,59,999);var audit=latestDeptAuditInMonth(d.code,yr,mi);var s=audit?frozenAuditScore(audit):null;var cr=audit?cumulativeClosureRateAt(trendFindings,d.code,monthEnd,yr):null;row[mn+'_Score']=s!==null?s+'%':'—';row[mn+'_Closure']=cr!==null?cr+'%':'—';});return row;});
+  var months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];var yr=new Date().getFullYear();var exportNow=new Date();
+  var monthlyData=depts.filter(d=>closureTrendDeptHasData(trendFindings,d.code,yr)||deptHasAuditInYear(d.code,yr)).map(d=>{var row={Department:d.name};months.forEach(function(mn,mi){var monthEnd=new Date(yr,mi+1,0,23,59,59,999);var isFutureMonth=yr>exportNow.getFullYear()||(yr===exportNow.getFullYear()&&mi>exportNow.getMonth());var audit=latestDeptAuditInMonth(d.code,yr,mi);var s=audit?frozenAuditScore(audit):null;var hasClosureData=!isFutureMonth&&trendFindings.some(function(f){if(f.dept!==d.code)return false;var raised=findingRaisedDate(f,yr);return raised&&raised<=monthEnd;});var cr=hasClosureData?cumulativeClosureRateAt(trendFindings,d.code,monthEnd,yr):null;row[mn+'_Score']=s!==null?s+'%':'—';row[mn+'_Closure']=cr!==null?cr+'%':'—';});return row;});
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(monthlyData),'Monthly Trends');
   XLSX.writeFile(wb,'OnePWS_Analytics_'+Date.now()+'.xlsx');showToast('Excel exported!');
 }
@@ -3489,6 +3502,8 @@ function selectCapa(key){
 function updateCapaStatus(key,status){
   const F=APP.findings;const f=findCapa(key,F);if(!f)return;
   f.status=status;f.capaStatus=status==='pending-closure'?'submitted':status;f.activityLog=f.activityLog||[];
+  if(status==='closed'&&!f.closedAt)f.closedAt=new Date().toISOString();
+  if(status!=='closed')f.closedAt=null;
   f.activityLog.push({user:APP.currentUser?.name||'System',action:'Status → '+STAT_LABEL[status],ts:new Date().toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'})});
   APP.findings=F;APP.activeCapaId=capaKey(f);addNotif('capa','CAPA Updated',`${f.ref} -> ${STAT_LABEL[status]}`,'capa',['admin','auditor','spoc']);
   if(status==='closed')renderPage('capa');else selectCapa(APP.activeCapaId);
@@ -3525,6 +3540,7 @@ function reviewDec(dec){
   const cmt=el('rev-cmt').value.trim();const key=APP.activeReviewId;const F=APP.findings;const f=findCapa(key,F);if(!f)return;
   f.decision=dec;f.decisionComments=cmt;f.decisionDate=new Date().toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'});
   f.status=dec==='accept'?'closed':'open';f.capaStatus=dec==='accept'?'closed':'open';
+  f.closedAt=dec==='accept'?new Date().toISOString():null;
   f.activityLog=f.activityLog||[];f.activityLog.push({user:APP.currentUser?.name,action:`Closure ${dec==='accept'?'ACCEPTED':'REJECTED'}${cmt?' — '+cmt:''}`,ts:f.decisionDate});
   APP.findings=F;APP.activeCapaId=capaKey(f);closeM('m-review');addNotif('closure',dec==='accept'?'✅ Closed':'❌ Rejected',`${f.ref}: ${dec==='accept'?'Closure accepted':'Reopened - '+cmt}`,'capa',['admin','auditor','spoc']);
   renderPage('capa');buildNav();showToast(dec==='accept'?'✅ Closed & verified!':'❌ Rejected. Reopened.');
