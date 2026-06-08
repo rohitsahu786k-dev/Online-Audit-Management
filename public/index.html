@@ -572,7 +572,8 @@ input:focus,select:focus,textarea:focus{border-color:var(--brand);background:var
   <div class="modal">
     <div class="mh">🔍 Review Closure <button class="btn btn-ghost btn-icon btn-sm" onclick="closeM('m-review')">✕</button></div>
     <div id="rev-content"></div>
-    <div class="mb2 mt2"><label class="lbl">Auditor Comments</label><textarea id="rev-cmt" style="height:50px;resize:none;" placeholder="Add review comments..."></textarea></div>
+    <div class="mb2 mt2"><label class="lbl">Audit Closure Date *</label><input type="date" id="rev-close-date"></div>
+    <div class="mb2"><label class="lbl">Auditor Comments</label><textarea id="rev-cmt" style="height:50px;resize:none;" placeholder="Add review comments..."></textarea></div>
     <div class="flex g2u"><button class="btn btn-danger" style="flex:1" onclick="reviewDec('reject')">❌ Reject & Reopen</button><button class="btn btn-success" style="flex:1" onclick="reviewDec('accept')">✅ Accept & Close</button></div>
   </div>
 </div>
@@ -1222,7 +1223,7 @@ function filterByDateRange(items, dateField){
   });
 }
 function filteredFindings(){
-  return filterByDateRange(APP.findings,['due','date','createdAt','submittedAt','closureDate','decisionDate']);
+  return filterByDateRange(APP.findings,['due','date','createdAt','submittedAt','closureDate','auditClosureDate','decisionDate','closedAt']);
 }
 function setDateFilter(from,to){APP.dateFrom=from||'';APP.dateTo=to||'';}
 function applyDateFilter(){
@@ -1491,6 +1492,28 @@ function auditDateText(audit){
   if(!d)return String(audit.submittedAt||audit.date||'');
   return d.toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'});
 }
+function auditDateFromInput(value){
+  if(!value)return null;
+  if(value instanceof Date&&!isNaN(value))return value;
+  var m=String(value).trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(m){var d=new Date(+m[1],+m[2]-1,+m[3]);return isNaN(d)?null:d;}
+  return parseAuditDate(value);
+}
+function dateInputValue(value){
+  var d=auditDateFromInput(value);
+  if(!d)return '';
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function todayInputValue(){
+  return dateInputValue(new Date());
+}
+function auditClosureDateText(value){
+  var d=auditDateFromInput(value);
+  return d?d.toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}):String(value||'');
+}
+function dateInputToLocalStart(value){
+  return value?value+'T00:00:00':'';
+}
 function auditScoreTrendHtml(scoreInfo){
   if(!scoreInfo||scoreInfo.delta===null)return '';
   var color=scoreInfo.delta>0?'green':scoreInfo.delta<0?'red':'text3';
@@ -1555,7 +1578,7 @@ function findingRaisedDate(f,yr){
   return parseAuditDate(f.createdAt||f.submittedAt||f.auditSubmittedAt||f.date,yr)||parseAuditDate(f.due,yr);
 }
 function findingClosedDate(f,yr){
-  return parseAuditDate(f.closedAt||f.decisionDate||f.closureDate,yr);
+  return parseAuditDate(f.auditClosureDate||f.closedAt||f.decisionDate||f.closureDate,yr);
 }
 function cumulativeClosureRateAt(findings,deptCode,monthEnd,yr){
   var rows=(findings||[]).filter(function(f){
@@ -3470,6 +3493,7 @@ function renderCapaDetail(f){
   </div>`:''}
   ${f.decision?`<div style="background:${f.decision==='accept'?'var(--green-bg)':'var(--red-bg)'};border:1px solid ${f.decision==='accept'?'#86efac':'#fca5a5'};border-radius:7px;padding:9px;margin-bottom:11px;">
     <div class="txs f7">${f.decision==='accept'?'✅ Accepted':'❌ Rejected'} — ${f.decisionDate||''}</div>
+    ${f.decision==='accept'?`<div class="txs td mt1">Audit Closure Date: ${auditClosureDateText(f.auditClosureDate||f.closedAt||f.decisionDate)}</div>`:''}
     ${f.decisionComments?`<div class="txs td mt1">${f.decisionComments}</div>`:''}
   </div>`:''}
   <div class="ch mt2"><span class="dot" style="background:var(--teal)"></span>Activity Log</div>
@@ -3502,8 +3526,12 @@ function selectCapa(key){
 function updateCapaStatus(key,status){
   const F=APP.findings;const f=findCapa(key,F);if(!f)return;
   f.status=status;f.capaStatus=status==='pending-closure'?'submitted':status;f.activityLog=f.activityLog||[];
-  if(status==='closed'&&!f.closedAt)f.closedAt=new Date().toISOString();
-  if(status!=='closed')f.closedAt=null;
+  if(status==='closed'){
+    if(!f.auditClosureDate)f.auditClosureDate=todayInputValue();
+    if(!f.closedAt)f.closedAt=dateInputToLocalStart(f.auditClosureDate);
+  }else{
+    f.auditClosureDate=null;f.closedAt=null;
+  }
   f.activityLog.push({user:APP.currentUser?.name||'System',action:'Status → '+STAT_LABEL[status],ts:new Date().toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'})});
   APP.findings=F;APP.activeCapaId=capaKey(f);addNotif('capa','CAPA Updated',`${f.ref} -> ${STAT_LABEL[status]}`,'capa',['admin','auditor','spoc']);
   if(status==='closed')renderPage('capa');else selectCapa(APP.activeCapaId);
@@ -3534,14 +3562,23 @@ function submitClosure(){
 function openReviewModal(key){
   APP.activeReviewId=key;const f=findCapa(key);
   el('rev-content').innerHTML=f?`<div style="background:var(--bg3);border-radius:7px;padding:9px;font-size:12px;"><div class="f7">${f.ref}: ${f.desc}</div><div class="txs td mt1">By ${f.closureSubmittedBy} · ${f.closureDate}</div><div class="mt2"><strong>Evidence:</strong><div class="tsm mt1">${f.closureEvidence}</div></div>${f.closureFiles?.length?`<div class="evpair mt2">${f.closureFiles.slice(0,2).map((fl,i)=>`<div class="evbox"><div class="evlabel">${i===0?'Before':'After'}</div>${isImageMedia(fl)?`<img src="${mediaUrl(fl)}">`:'<div class="evph">'+mediaIcon(fl)+'</div>'}</div>`).join('')}</div>`:''}</div>`:'';
+  var closeDate=el('rev-close-date');
+  if(closeDate){closeDate.max=todayInputValue();closeDate.value=dateInputValue(f?.auditClosureDate||f?.closedAt||f?.closureDate||new Date());}
   el('rev-cmt').value='';openM('m-review');
 }
 function reviewDec(dec){
   const cmt=el('rev-cmt').value.trim();const key=APP.activeReviewId;const F=APP.findings;const f=findCapa(key,F);if(!f)return;
+  var auditClosureDate=el('rev-close-date')?el('rev-close-date').value:'';
+  if(dec==='accept'){
+    var selected=auditDateFromInput(auditClosureDate),today=auditDateFromInput(todayInputValue());
+    if(!auditClosureDate||!selected){showToast('⚠ Select audit closure date');return;}
+    if(today&&selected>today){showToast('⚠ Audit closure date cannot be future');return;}
+  }
   f.decision=dec;f.decisionComments=cmt;f.decisionDate=new Date().toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'});
   f.status=dec==='accept'?'closed':'open';f.capaStatus=dec==='accept'?'closed':'open';
-  f.closedAt=dec==='accept'?new Date().toISOString():null;
-  f.activityLog=f.activityLog||[];f.activityLog.push({user:APP.currentUser?.name,action:`Closure ${dec==='accept'?'ACCEPTED':'REJECTED'}${cmt?' — '+cmt:''}`,ts:f.decisionDate});
+  f.auditClosureDate=dec==='accept'?auditClosureDate:null;
+  f.closedAt=dec==='accept'?dateInputToLocalStart(auditClosureDate):null;
+  f.activityLog=f.activityLog||[];f.activityLog.push({user:APP.currentUser?.name,action:`Closure ${dec==='accept'?'ACCEPTED':'REJECTED'}${dec==='accept'?' effective '+auditClosureDateText(auditClosureDate):''}${cmt?' — '+cmt:''}`,ts:f.decisionDate});
   APP.findings=F;APP.activeCapaId=capaKey(f);closeM('m-review');addNotif('closure',dec==='accept'?'✅ Closed':'❌ Rejected',`${f.ref}: ${dec==='accept'?'Closure accepted':'Reopened - '+cmt}`,'capa',['admin','auditor','spoc']);
   renderPage('capa');buildNav();showToast(dec==='accept'?'✅ Closed & verified!':'❌ Rejected. Reopened.');
 }
