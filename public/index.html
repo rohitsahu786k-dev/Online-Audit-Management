@@ -631,7 +631,7 @@ var API_BASE='';
 var _apiReady=false;
 
 // Keys to sync with MongoDB through the backend API (shared team data)
-var SYNC_KEYS=['ap_users','ap_depts','ap_auds','ap_cps','ap_finds','ap_learns','ap_completed_audits','ap_planned_audits','ap_import_logs','ap_capa_due','ap_secs','ap_notifs','ap_stds','ap_email_master','ap_email_templates','ap_email_logs','ap_media_library','ap_escalation_matrix'];
+var SYNC_KEYS=['ap_users','ap_depts','ap_auds','ap_cps','ap_finds','ap_learns','ap_completed_audits','ap_planned_audits','ap_import_logs','ap_capa_due','ap_secs','ap_notifs','ap_stds','ap_permissions','ap_email_master','ap_email_templates','ap_email_logs','ap_media_library','ap_escalation_matrix'];
 var _myWrites={};
 var _syncStatus='connecting';
 
@@ -666,6 +666,9 @@ function _sanitizeSyncData(k,data){
   if(k==='ap_completed_audits'&&Array.isArray(data)){
     return normalizeCompletedAuditsData(data).value;
   }
+  if(k==='ap_permissions'&&data&&typeof data==='object'&&typeof normalizePermissions==='function'){
+    return data.roles?data:{version:PERMISSIONS_VERSION,roles:normalizePermissions(data)};
+  }
   return data;
 }
 
@@ -689,6 +692,12 @@ function _mergeEmailLogs(local,remote){
 function _refreshAfterSync(k){
   if(typeof APP==='undefined'||typeof renderPage!=='function')return;
   var page=APP.currentPage;
+  if(k==='ap_permissions'){
+    if(typeof loadPermissions==='function')PERMS=loadPermissions();
+    renderPage(page);
+    if(typeof buildNav==='function')buildNav();
+    return;
+  }
   var relevantPages={
     ap_finds:['findings','capa','dashboard','reports','mytasks','mastertracker'],
     ap_planned_audits:['execution','planning'],
@@ -702,7 +711,8 @@ function _refreshAfterSync(k){
     ap_email_master:['masterdata'],
     ap_email_templates:['masterdata'],
     ap_email_logs:['masterdata'],
-    ap_media_library:['media']
+    ap_media_library:['media'],
+    ap_permissions:['adminpanel']
   };
   var pages=relevantPages[k]||[];
   if(pages.indexOf(page)>-1)renderPage(page);
@@ -1056,13 +1066,39 @@ else window.addEventListener('load',function(){setTimeout(initApiSync,1000);});
 // ═══════════════════════════════════════════════════
 // PERMISSIONS
 // ═══════════════════════════════════════════════════
-const PERMS={
+const PERMISSIONS_VERSION=2;
+const DEFAULT_PERMS={
   admin:  {ocp:1,dashboard:1,analytics:1,planning:1,execution:1,reports:1,findings:1,capa:1,learnings:1,media:1,masterdata:1,adminpanel:1,mytasks:1,managerpanel:1,mastertracker:1,importdata:1},
-  auditor:{ocp:1,dashboard:1,analytics:1,planning:1,execution:1,reports:1,findings:1,capa:1,learnings:1,media:1,masterdata:0,adminpanel:0,mytasks:1,mastertracker:1,importdata:1},
-  spoc:   {ocp:1,dashboard:1,analytics:1,planning:0,execution:0,reports:1,findings:1,capa:1,learnings:1,media:1,masterdata:0,adminpanel:0,mytasks:1,mastertracker:1,importdata:0},
+  auditor:{ocp:1,dashboard:1,analytics:1,planning:1,execution:1,reports:1,findings:1,capa:1,learnings:1,media:1,masterdata:0,adminpanel:0,mytasks:1,managerpanel:1,mastertracker:1,importdata:1},
+  spoc:   {ocp:1,dashboard:1,analytics:1,planning:0,execution:0,reports:1,findings:1,capa:1,learnings:1,media:1,masterdata:0,adminpanel:0,mytasks:1,managerpanel:0,mastertracker:1,importdata:0},
   manager:{ocp:1,dashboard:1,analytics:1,planning:0,execution:0,reports:1,findings:1,capa:1,learnings:1,media:1,masterdata:0,adminpanel:0,mytasks:1,managerpanel:1,mastertracker:1,importdata:0},
-  viewer: {ocp:1,dashboard:1,analytics:1,planning:0,execution:0,reports:1,findings:1,capa:0,learnings:0,media:1,masterdata:0,adminpanel:0,mytasks:1,mastertracker:0,importdata:0},
+  viewer: {ocp:1,dashboard:1,analytics:1,planning:0,execution:0,reports:1,findings:1,capa:0,learnings:0,media:1,masterdata:0,adminpanel:0,mytasks:1,managerpanel:0,mastertracker:0,importdata:0},
 };
+function cloneDefaultPermissions(){return JSON.parse(JSON.stringify(DEFAULT_PERMS));}
+function normalizePermissions(saved){
+  var base=cloneDefaultPermissions();
+  var roles=(saved&&saved.roles&&typeof saved.roles==='object')?saved.roles:saved;
+  if(roles&&typeof roles==='object'){
+    Object.keys(base).forEach(function(role){
+      if(!roles[role]||typeof roles[role]!=='object')return;
+      Object.keys(base[role]).forEach(function(page){
+        if(Object.prototype.hasOwnProperty.call(roles[role],page))base[role][page]=roles[role][page]?1:0;
+      });
+    });
+  }
+  if(!saved||!saved.version||saved.version<PERMISSIONS_VERSION)base.auditor.managerpanel=1;
+  base.admin=Object.keys(base.admin).reduce(function(acc,page){acc[page]=1;return acc;},{});
+  return base;
+}
+function permissionsPayload(){return{version:PERMISSIONS_VERSION,roles:PERMS};}
+function loadPermissions(){
+  var saved=LS.get('ap_permissions',null);
+  var perms=normalizePermissions(saved);
+  if(!saved||!saved.version||saved.version<PERMISSIONS_VERSION)LS.set('ap_permissions',{version:PERMISSIONS_VERSION,roles:perms});
+  return perms;
+}
+let PERMS=loadPermissions();
+let _permissionsDirty=false;
 const ROLE_COLORS={admin:'#7c3aed',auditor:'#2563eb',spoc:'#16a34a',manager:'#d97706',viewer:'#6b7280'};
 const ROLE_LABELS={admin:'Master Admin',auditor:'Auditor',spoc:'Dept SPOC',manager:'Manager',viewer:'Mgmt Viewer'};
 const ROLE_BADGE={admin:'b-purple',auditor:'b-blue',spoc:'b-green',manager:'b-amber',viewer:'b-gray'};
@@ -1747,7 +1783,7 @@ window.addEventListener('hashchange',()=>{const h=location.hash.slice(1);if(h&&A
 document.addEventListener('DOMContentLoaded',()=>{
   // v4.2 fresh start - auto-clear old v4.1 data on first load
   if(!localStorage.getItem('ap_v45_prod')){
-    ['ap_users','ap_depts','ap_auds','ap_cps','ap_finds','ap_notifs','ap_secs','ap_learns','ap_sess','ap_cu','ap_stds','imp_cnt','imp_errs','imp_last','imp_log','ap_completed_audits','ap_planned_audits','ap_import_logs','ap_active_audit','ap_v45_prod'].forEach(k=>localStorage.removeItem(k));
+    ['ap_users','ap_depts','ap_auds','ap_cps','ap_finds','ap_notifs','ap_secs','ap_learns','ap_sess','ap_cu','ap_stds','ap_permissions','imp_cnt','imp_errs','imp_last','imp_log','ap_completed_audits','ap_planned_audits','ap_import_logs','ap_active_audit','ap_v45_prod'].forEach(k=>localStorage.removeItem(k));
     localStorage.setItem('ap_v45_prod','1');
   }
   // Set logo
@@ -4030,7 +4066,7 @@ function setAdmTab(t,e){APP.admTab=t;document.querySelectorAll('#admt .tab').for
 function renderAdmBody(t='users'){
   const mc=el('adm-body');if(!mc)return;
   if(t==='users'||!t){mc.innerHTML=`<div class="card"><div class="fb mb2"><div class="ch" style="margin:0"><span class="dot" style="background:var(--purple)"></span>Users (${APP.users.length})</div><button class="btn btn-brand btn-sm" onclick="openUserModal()">+ Add User</button></div><div class="tw"><table><thead><tr><th>Name</th><th>Login</th><th>Role</th><th>Dept</th><th>Status</th><th>Actions</th></tr></thead><tbody>${APP.users.map(u=>`<tr><td class="pr">${u.name}</td><td>${u.loginId}</td><td>${badge(ROLE_BADGE[u.role]||'b-gray',ROLE_LABELS[u.role]||u.role)}</td><td>${u.dept||'—'}</td><td>${badge(u.active?'b-green':'b-gray',u.active?'Active':'Inactive')}</td><td class="flex g1u"><button class="btn btn-ghost btn-sm" onclick="editUser('${u.id}')">✏️</button><button class="btn btn-primary btn-sm" onclick="resetUserPw('${u.id}')">🔑</button><button class="btn btn-amber btn-sm" onclick="toggleUser('${u.id}')">${u.active?'Deact':'Act'}</button>${u.id!==APP.currentUser?.id?`<button class="btn btn-danger btn-sm" onclick="delUser('${u.id}')">🗑</button>`:''}</td></tr>`).join('')}</tbody></table></div></div>`;}
-  if(t==='perms'){mc.innerHTML=`<div class="card"><div class="ch"><span class="dot" style="background:var(--purple)"></span>Role Permissions Matrix — Click checkboxes to modify</div><div class="tw"><table><thead><tr><th>Module</th>${ROLE_ORDER.map(r=>`<th>${badge(ROLE_BADGE[r],ROLE_LABELS[r])}</th>`).join('')}</tr></thead><tbody>${Object.keys(PAGE_META).map(page=>`<tr><td class="pr">${PAGE_META[page]?.title||page}</td>${ROLE_ORDER.map(role=>`<td style="text-align:center;"><input type="checkbox" ${PERMS[role]?.[page]?'checked':''} onchange="togglePerm('${role}','${page}',this.checked)" ${role==='admin'?'disabled':''}></td>`).join('')}</tr>`).join('')}</tbody></table></div><button class="btn btn-brand btn-sm mt2" onclick="showToast('✅ Permissions saved')">Save Permissions</button></div>`;}
+  if(t==='perms'){mc.innerHTML=`<div class="card"><div class="ch"><span class="dot" style="background:var(--purple)"></span>Role Permissions Matrix — Click checkboxes to modify</div><div class="tw"><table><thead><tr><th>Module</th>${ROLE_ORDER.map(r=>`<th>${badge(ROLE_BADGE[r],ROLE_LABELS[r])}</th>`).join('')}</tr></thead><tbody>${Object.keys(PAGE_META).map(page=>`<tr><td class="pr">${PAGE_META[page]?.title||page}</td>${ROLE_ORDER.map(role=>`<td style="text-align:center;"><input type="checkbox" ${PERMS[role]?.[page]?'checked':''} onchange="togglePerm('${role}','${page}',this.checked)" ${role==='admin'?'disabled':''}></td>`).join('')}</tr>`).join('')}</tbody></table></div><button class="btn btn-brand btn-sm mt2" onclick="savePermissions()">Save Permissions</button></div>`;}
   if(t==='sys'){mc.innerHTML=`<div class="card"><div class="ch"><span class="dot" style="background:var(--brand)"></span>CAPA Target Due Days (by Severity)</div>
 <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px;">
   <div><div class="lbl">Critical</div><input type="number" id="dd-critical" value="${APP.capaDueDays?.critical||7}" min="1" max="90" style="text-align:center;"></div>
@@ -4062,7 +4098,8 @@ function saveSystemSettings(){
   LS.set('ap_show_creds',false);
   showToast('Settings saved');
 }
-function togglePerm(role,page,val){if(role==='admin')return;PERMS[role][page]=val?1:0;buildNav();showToast('Permission updated');}
+function savePermissions(){PERMS=normalizePermissions(permissionsPayload());LS.set('ap_permissions',permissionsPayload());_permissionsDirty=false;buildNav();showToast('✅ Permissions saved and synced');}
+function togglePerm(role,page,val){if(role==='admin')return;if(!PERMS[role])PERMS[role]={};PERMS[role][page]=val?1:0;_permissionsDirty=true;buildNav();showToast('Permission updated. Click Save Permissions to sync.');}
 function openUserModal(id){const u=id?APP.users.find(x=>x.id===id):null;el('usr-mtitle').textContent=u?'Edit User':'Add User';el('usr-name').value=u?.name||'';el('usr-lid').value=u?.loginId||'';el('usr-pw').value=u?.password||'';el('usr-role').value=u?.role||'auditor';el('usr-email').value=u?.email||'';el('usr-eid').value=u?.id||'';populateDeptSel('usr-dept');if(u)el('usr-dept').value=u.dept||'';openM('m-user');}
 function editUser(id){openUserModal(id);}
 function saveUser(){const n=el('usr-name').value.trim(),lid=el('usr-lid').value.trim(),pw=el('usr-pw').value.trim();const eidVal=el('usr-eid').value;const oldUser=eidVal?APP.users.find(u=>u.id===eidVal):null;const oldName=oldUser?.name||'';if(!n||!lid){showToast('⚠ Name and Login ID required');return;}const eid=el('usr-eid').value;const U=APP.users;const conflict=U.find(u=>u.loginId===lid&&u.id!==eid);if(conflict){showToast('⚠ Login ID exists');return;}const obj={name:n,loginId:lid,password:pw||'changeme',role:el('usr-role').value,dept:el('usr-dept').value,email:el('usr-email').value.trim(),active:true,avatar:n.substring(0,2).toUpperCase()};if(eid){const i=U.findIndex(u=>u.id===eid);if(i>=0){obj.id=eid;obj.active=U[i].active;U[i]=obj;}}else{obj.id='u'+Date.now();U.push(obj);}APP.users=U;
@@ -4172,17 +4209,18 @@ function renderMytasks(){
 function managerDeptCodes(user){
   user=user||APP.currentUser;
   if(!user)return [];
-  if(user.role==='admin')return APP.depts.map(d=>d.code);
+  if(!PERMS[user.role]?.managerpanel)return [];
+  if(user.role==='admin'||user.role==='auditor')return APP.depts.map(d=>d.code);
   const codes=new Set();
   if(user.dept)codes.add(user.dept);
   (APP.emailMaster||[]).forEach(r=>{if(r.reportingEmail&&user.email&&r.reportingEmail.toLowerCase()===user.email.toLowerCase())codes.add(r.deptCode);});
   return [...codes];
 }
-function canManageFinding(f){const u=APP.currentUser;if(!u)return false;if(u.role==='admin')return true;if(u.role!=='manager')return false;return managerDeptCodes(u).includes(f.dept);}
+function canManageFinding(f){const u=APP.currentUser;if(!u)return false;if(u.role==='admin'||u.role==='auditor')return true;if(u.role!=='manager')return false;return managerDeptCodes(u).includes(f.dept);}
 function managerFindings(){const codes=managerDeptCodes();return filteredFindings().filter(f=>codes.includes(f.dept));}
 function renderManagerPanel(){
   const u=APP.currentUser;
-  if(!['manager','admin'].includes(u?.role))return '<div class="info-box">🔒 Manager Console is available only for Manager and Admin roles.</div>';
+  if(!PERMS[u?.role]?.managerpanel)return '<div class="info-box">🔒 Manager Console access is disabled for your role.</div>';
   const codes=managerDeptCodes(u),F=managerFindings(),open=F.filter(f=>f.status!=='closed'),overdue=open.filter(f=>delayDays(f)>0);
   const byDept=codes.map(code=>{const d=APP.depts.find(x=>x.code===code)||{code,name:code};const df=open.filter(f=>f.dept===code);return{code,name:d.name,total:df.length,overdue:df.filter(f=>delayDays(f)>0).length,critical:df.filter(f=>f.sev==='critical').length};});
   return `<div class="grid g3 sg"><div class="stat"><div class="sl">Managed Depts</div><div class="sv">${codes.length}</div></div><div class="stat"><div class="sl">Open NCs</div><div class="sv">${open.length}</div></div><div class="stat"><div class="sl">Overdue</div><div class="sv" style="color:var(--red)">${overdue.length}</div></div></div>
@@ -4195,7 +4233,7 @@ function managerSendDeptReminder(code){
 }
 function managerSendSummary(){
   const u=APP.currentUser,rows=managerFindings().filter(f=>f.status!=='closed');if(!rows.length){showToast('No open NCs to summarize');return;}
-  if(!u.email){showToast('Manager email is missing in profile');return;}
+  if(!u.email){showToast('Email is missing in profile');return;}
   const html='<h3>Manager NC Summary</h3>'+ncTable(rows);
   sendLoggedEmail('manager_summary',[u.email],managementEmails(),'Manager NC Summary - '+new Date().toLocaleDateString(),html.replace(/<[^>]+>/g,' '),html,'');
 }

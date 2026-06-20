@@ -33,6 +33,7 @@ const SYNC_KEYS = [
   'ap_secs',
   'ap_notifs',
   'ap_stds',
+  'ap_permissions',
   'ap_email_master',
   'ap_email_templates',
   'ap_email_logs',
