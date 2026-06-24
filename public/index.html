@@ -620,7 +620,7 @@ input:focus,select:focus,textarea:focus{border-color:var(--brand);background:var
 // ═══════════════════════════════════════════════════
 const LOGO_SRC = 'assets/onepws-dark-logo-scaled.png';
 const OCP_PDF_SRC = 'assets/OCP_Manual_v4.3_Complete.pdf';
-const REQUIRED_CC_EMAIL = 'process@onepws.com';
+const DEFAULT_REQUIRED_CC_EMAILS = ['ankit.chittora@onepws.com','process@onepws.com','jatin.chouhan@onepws.com'];
 const PUBLIC_APP_URL = 'https://audit.onepws.com';
 
 // ═══════════════════════════════════════════════════
@@ -2001,9 +2001,16 @@ function appDashboardUrl(){
   const base=(!origin||isLocalHost)?PUBLIC_APP_URL:origin;
   return base.replace(/\/$/,'')+'/#dashboard';
 }
+function getRequiredCcEmails(){
+  var saved=LS.get('ap_required_cc_emails',null);
+  return Array.isArray(saved)?saved:DEFAULT_REQUIRED_CC_EMAILS.slice();
+}
+function setRequiredCcEmails(list){
+  LS.set('ap_required_cc_emails',list);
+}
 function requiredCcEmails(toList){
   const toSet=new Set((toList||[]).map(x=>String(x).toLowerCase()));
-  return [...new Set([REQUIRED_CC_EMAIL].filter(Boolean))]
+  return [...new Set(getRequiredCcEmails().filter(Boolean))]
     .filter(email=>!toSet.has(String(email).toLowerCase()));
 }
 function addEmailDashboardAccess(text,html){
@@ -4007,9 +4014,47 @@ function importEmailMaster(evt){
   reader.onload=function(e){try{const wb=XLSX.read(e.target.result,{type:'array'});const sheet=wb.Sheets['Email ID Database']||wb.Sheets[wb.SheetNames[0]];const data=XLSX.utils.sheet_to_json(sheet);let imported=0,updated=0,errs=[];const rows=APP.emailMaster;data.forEach(function(row,i){const rn=i+2;const deptName=String(row.DepartmentName||row.Department||row.dept||row['Department Name']||'').trim();if(!deptName){errs.push('Row '+rn+': department missing');return;}const dept=ensureEmailDept(deptName);const email=joinEmailList(row.EmailID||row.Email||row.email||row['Email Id']||row['Email ID']||'');const obj={id:'em_'+dept.code,spocName:String(row.SPOCName||row['SPOC Name']||'').trim(),email,deptCode:dept.code,department:dept.name,reportingName:String(row.ReportingToName||row['Reporting To Name']||row['Reporting To (Name)']||'').trim(),reportingEmail:joinEmailList(row.ReportingToEmail||row['Reporting To Email']||row['Reporting To (Email)']||''),hodEmail:joinEmailList(row.HODBUHEmail||row['HOD/BUH Email']||row['HOD/BUH Mail']||''),managementEmail:joinEmailList(row.ManagementEmail||row['Management Email']||''),status:String(row.Status||'Active').toLowerCase()==='inactive'?'inactive':'active',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};const idx=rows.findIndex(r=>r.deptCode===dept.code);if(idx>=0){obj.id=rows[idx].id;obj.createdAt=rows[idx].createdAt||obj.createdAt;rows[idx]=Object.assign({},rows[idx],obj);updated++;}else{rows.unshift(obj);imported++;}});APP.emailMaster=rows;renderMdBody();showToast('Imported '+imported+' email records, updated '+updated+(errs.length?' / '+errs.length+' skipped':''),5000);}catch(err){showToast('Import failed: '+err.message);}};
   reader.readAsArrayBuffer(file);
 }
+function renderCcManager(){
+  const ccList=getRequiredCcEmails();
+  return `<div class="card sg"><div class="fb mb2"><div class="ch" style="margin:0"><span class="dot" style="background:var(--teal)"></span>Global CC Recipients (All Emails)</div></div>
+<div class="txs td mb2">These emails are automatically added to CC on <strong>every</strong> outgoing email. Use Add/Remove to manage the list.</div>
+<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;" id="cc-chips">${ccList.map((email,i)=>`<span style="display:inline-flex;align-items:center;gap:5px;padding:5px 10px;background:var(--accent-l);border:1px solid #bfdbfe;border-radius:20px;font-size:11px;font-weight:600;color:var(--accent);"><span>${sanitize(email)}</span><button class="btn btn-icon" style="padding:1px;width:16px;height:16px;min-width:0;font-size:9px;background:var(--red-bg);color:var(--red);border-radius:50%;border:1px solid #fca5a5;" onclick="removeCcEmail(${i})" title="Remove">✕</button></span>`).join('')}</div>
+<div class="flex g2u">
+<input id="cc-new-email" type="email" placeholder="Add new CC email address..." style="flex:1;min-width:200px;" onkeydown="if(event.key==='Enter')addCcEmail()">
+<button class="btn btn-primary btn-sm" onclick="addCcEmail()">+ Add CC</button>
+<button class="btn btn-ghost btn-sm" onclick="resetCcEmails()" title="Reset to defaults">↺ Reset</button>
+</div>
+</div>`;
+}
+function addCcEmail(){
+  const inp=el('cc-new-email');if(!inp)return;
+  const email=inp.value.trim().toLowerCase();
+  if(!email||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){showToast('⚠ Enter a valid email address');return;}
+  const list=getRequiredCcEmails();
+  if(list.some(e=>e.toLowerCase()===email)){showToast('⚠ Email already in CC list');return;}
+  list.push(email);
+  setRequiredCcEmails(list);
+  inp.value='';
+  renderMdBody();
+  showToast('✅ '+email+' added to CC');
+}
+function removeCcEmail(idx){
+  const list=getRequiredCcEmails();
+  const removed=list.splice(idx,1);
+  setRequiredCcEmails(list);
+  renderMdBody();
+  showToast('Removed '+(removed[0]||'email')+' from CC');
+}
+function resetCcEmails(){
+  confirmAct('Reset CC list to defaults (ankit.chittora, process, jatin.chouhan)?',function(){
+    setRequiredCcEmails(DEFAULT_REQUIRED_CC_EMAILS.slice());
+    renderMdBody();
+    showToast('CC list reset to defaults');
+  });
+}
 function renderEmailTemplates(canEdit){
   const list=APP.emailTemplates||[];const active=list.find(t=>t.id===(APP.emailTemplateId||''))||list[0]||{};APP.emailTemplateId=active.id;
-  return `<div class="grid g21 sg"><div class="card"><div class="ch"><span class="dot" style="background:var(--purple)"></span>Email Templates</div>${list.map(t=>`<div class="fcard ${APP.emailTemplateId===t.id?'minor':''}" onclick="APP.emailTemplateId='${t.id}';renderMdBody()"><div class="fb"><span class="f7">${sanitize(t.name)}</span>${badge(t.active!==false?'b-green':'b-gray',t.active!==false?'Active':'Disabled')}</div><div class="txs td">${sanitize(t.type)}</div></div>`).join('')}</div><div class="card"><div class="ch"><span class="dot" style="background:var(--brand)"></span>Edit Template</div><div style="display:flex;flex-direction:column;gap:8px;"><div><label class="lbl">Template Name</label><input id="et-name" value="${sanitize(active.name||'')}"></div><div><label class="lbl">Subject</label><input id="et-subject" value="${sanitize(active.subject||'')}"></div><div><label class="lbl">Body HTML</label><textarea id="et-body" style="height:190px;resize:vertical;">${sanitize(active.body||'')}</textarea></div><label style="display:flex;gap:6px;align-items:center;font-size:12px;"><input type="checkbox" id="et-active" ${active.active!==false?'checked':''}> Active</label><div class="txs td">Variables: {{department_name}}, {{audit_name}}, {{nc_number}}, {{target_date}}, {{delay_days}}, {{spoc_name}}, {{clause_name}}, {{clause_description}}, {{nc_table}}, {{window_days}}, {{escalation_level}}</div>${canEdit?`<div class="flex g2u"><button class="btn btn-brand" onclick="saveEmailTemplate()">Save Template</button><button class="btn btn-ghost" onclick="sendTestTemplate()">Send Test</button></div>`:''}</div></div></div>`;
+  return renderCcManager()+`<div class="grid g21 sg"><div class="card"><div class="ch"><span class="dot" style="background:var(--purple)"></span>Email Templates</div>${list.map(t=>`<div class="fcard ${APP.emailTemplateId===t.id?'minor':''}" onclick="APP.emailTemplateId='${t.id}';renderMdBody()"><div class="fb"><span class="f7">${sanitize(t.name)}</span>${badge(t.active!==false?'b-green':'b-gray',t.active!==false?'Active':'Disabled')}</div><div class="txs td">${sanitize(t.type)}</div></div>`).join('')}</div><div class="card"><div class="ch"><span class="dot" style="background:var(--brand)"></span>Edit Template</div><div style="display:flex;flex-direction:column;gap:8px;"><div><label class="lbl">Template Name</label><input id="et-name" value="${sanitize(active.name||'')}"></div><div><label class="lbl">Subject</label><input id="et-subject" value="${sanitize(active.subject||'')}"></div><div><label class="lbl">Body HTML</label><textarea id="et-body" style="height:190px;resize:vertical;">${sanitize(active.body||'')}</textarea></div><label style="display:flex;gap:6px;align-items:center;font-size:12px;"><input type="checkbox" id="et-active" ${active.active!==false?'checked':''}> Active</label><div class="txs td">Variables: {{department_name}}, {{audit_name}}, {{nc_number}}, {{target_date}}, {{delay_days}}, {{spoc_name}}, {{clause_name}}, {{clause_description}}, {{nc_table}}, {{window_days}}, {{escalation_level}}</div>${canEdit?`<div class="flex g2u"><button class="btn btn-brand" onclick="saveEmailTemplate()">Save Template</button><button class="btn btn-ghost" onclick="sendTestTemplate()">Send Test</button></div>`:''}</div></div></div>`;
 }
 function saveEmailTemplate(){const rows=APP.emailTemplates;const t=rows.find(x=>x.id===APP.emailTemplateId);if(!t)return;t.name=el('et-name').value.trim();t.subject=el('et-subject').value.trim();t.body=el('et-body').value;t.active=el('et-active').checked;t.updatedAt=new Date().toISOString();APP.emailTemplates=rows;renderMdBody();showToast('Template saved');}
 function renderEmailLogs(){const logs=APP.emailLogs||[];return `<div class="card"><div class="fb mb2"><div class="ch" style="margin:0"><span class="dot" style="background:var(--accent)"></span>Email Logs (${logs.length})</div><button class="btn btn-ghost btn-sm" onclick="clearEmailLogs()">Clear Logs</button></div><div class="tw"><table><thead><tr><th>Type</th><th>To</th><th>CC</th><th>Subject</th><th>Status</th><th>Sent Date</th><th>Attachment</th></tr></thead><tbody>${logs.map(l=>`<tr><td>${sanitize(l.type)}</td><td>${sanitize(l.to)}</td><td>${sanitize(l.cc)}</td><td>${sanitize(l.subject)}</td><td>${badge(l.status==='sent'?'b-green':'b-red',l.status)}</td><td>${new Date(l.sentAt).toLocaleString()}</td><td>${sanitize(l.attachment||'-')}</td></tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--text3);padding:12px;">No email logs yet</td></tr>'}</tbody></table></div></div>`;}
@@ -4229,13 +4274,27 @@ function renderManagerPanel(){
 }
 function managerSendDeptReminder(code){
   const rows=managerFindings().filter(f=>f.dept===code&&f.status!=='closed');if(!rows.length){showToast('No open NCs for this department');return;}
-  sendTemplateEmail(rows.some(f=>delayDays(f)>0)?'delayed':'upcoming_reminder',code,rows,{escalation_level:'Manager'}).then(()=>showToast('Department reminder sent/logged'));
+  const spocTo=spocEmails(code);
+  const fixedCc=['ankit.chittora@onepws.com','process@onepws.com','jatin.chouhan@onepws.com'];
+  const d=APP.depts.find(x=>x.code===code)||{code,name:code};
+  const type=rows.some(f=>delayDays(f)>0)?'delayed':'upcoming_reminder';
+  const tpl=emailTpl(type);
+  const rec=recipientsForDept(code,type,rows.reduce((m,f)=>Math.max(m,delayDays(f)),0));
+  const first=rows&&rows[0]||{};
+  const subject='Overdue NCs - '+d.name;
+  const vars={department_name:d.name,spoc_name:rec.spocName,nc_count:rows.length,nc_number:first.ref||'',target_date:first.due||'',delay_days:delayDays(first),clause_name:clauseName(first.clause),clause_description:clauseDescription(first.clause),nc_table:ncTable(rows),window_days:5,escalation_level:'Manager'};
+  const html=replaceTemplate(tpl.body,vars);
+  const ccMerged=[...new Set(fixedCc.concat(rec.cc))];
+  sendLoggedEmail(type,spocTo.length?spocTo:rec.to,ccMerged,subject,html.replace(/<[^>]+>/g,' '),html,'').then(()=>showToast('Department reminder sent/logged'));
 }
 function managerSendSummary(){
   const u=APP.currentUser,rows=managerFindings().filter(f=>f.status!=='closed');if(!rows.length){showToast('No open NCs to summarize');return;}
-  if(!u.email){showToast('Email is missing in profile');return;}
-  const html='<h3>Manager NC Summary</h3>'+ncTable(rows);
-  sendLoggedEmail('manager_summary',[u.email],managementEmails(),'Manager NC Summary - '+new Date().toLocaleDateString(),html.replace(/<[^>]+>/g,' '),html,'');
+  const to=['ankit.chittora@onepws.com'];
+  const cc=['puneet@onepws.com','kanishka@onepws.com','process@onepws.com','jatin.chouhan@onepws.com'];
+  const dateStr=new Date().toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'});
+  const subject='Consolidated NC Status Report of Each Department – '+dateStr;
+  const html='<h3>'+sanitize(subject)+'</h3>'+ncTable(rows);
+  sendLoggedEmail('manager_summary',to,cc,subject,html.replace(/<[^>]+>/g,' '),html,'');
 }
 
 // ═══════════════════════════════════════════════════
