@@ -462,7 +462,7 @@ input:focus,select:focus,textarea:focus{border-color:var(--brand);background:var
     <div class="mb2"><label class="lbl">Severity *</label><select id="fm-sev"><option value="critical">Critical</option><option value="major" selected>Major</option><option value="minor">Minor</option><option value="obs">Observation</option></select></div>
     <div class="mb2"><label class="lbl">Finding Description *</label><textarea id="fm-desc" style="height:64px;resize:none;" placeholder="What was observed?"></textarea></div>
     <div class="mb2"><label class="lbl">Immediate Correction</label><textarea id="fm-cont" style="height:40px;resize:none;" placeholder="What was done on the spot?"></textarea></div>
-    <div class="mb2"><label class="lbl">Root Cause Category</label><select id="fm-rc"><option>Man (Training)</option><option>Machine/System</option><option>Method (SOP)</option><option>Material</option><option>Measurement</option><option>Environment</option></select></div>
+    <div class="mb2"><label class="lbl">Root Cause Category</label><select id="fm-rc"></select></div>
     <div id="fm-ai" style="background:var(--purple-bg);border:1px solid #ddd6fe;border-radius:7px;padding:8px;font-size:11px;color:var(--purple);margin-bottom:11px;"></div>
     <div class="mb2"><label class="lbl">Evidence Photos</label>
       <div class="uparea" onclick="document.getElementById('fm-fi').click()" id="fm-ua" ondragover="event.preventDefault();this.classList.add('drag')" ondragleave="this.classList.remove('drag')" ondrop="handleDrop(event,'finding')">
@@ -631,7 +631,7 @@ var API_BASE='';
 var _apiReady=false;
 
 // Keys to sync with MongoDB through the backend API (shared team data)
-var SYNC_KEYS=['ap_users','ap_depts','ap_auds','ap_cps','ap_finds','ap_learns','ap_completed_audits','ap_planned_audits','ap_import_logs','ap_capa_due','ap_secs','ap_notifs','ap_stds','ap_permissions','ap_email_master','ap_email_templates','ap_email_logs','ap_media_library','ap_escalation_matrix'];
+var SYNC_KEYS=['ap_users','ap_depts','ap_auds','ap_cps','ap_finds','ap_learns','ap_completed_audits','ap_planned_audits','ap_import_logs','ap_capa_due','ap_secs','ap_notifs','ap_stds','ap_permissions','ap_email_master','ap_email_templates','ap_email_logs','ap_required_cc_emails','ap_root_causes','ap_media_library','ap_escalation_matrix'];
 var _myWrites={};
 var _syncStatus='connecting';
 
@@ -711,6 +711,8 @@ function _refreshAfterSync(k){
     ap_email_master:['masterdata'],
     ap_email_templates:['masterdata'],
     ap_email_logs:['masterdata'],
+    ap_required_cc_emails:['masterdata'],
+    ap_root_causes:['masterdata','execution'],
     ap_media_library:['media'],
     ap_permissions:['adminpanel']
   };
@@ -874,6 +876,34 @@ const DEF_ESCALATION_MATRIX=[
   {min:15,max:30,label:'15-30 Days',to:['spoc'],cc:['manager','hod']},
   {min:31,max:9999,label:'30+ Days',to:['spoc'],cc:['management']}
 ];
+const DEF_ROOT_CAUSES=[
+  {id:'rc_man_training',name:'Man (Training)',status:'active',createdAt:'',updatedAt:''},
+  {id:'rc_machine_system',name:'Machine/System',status:'active',createdAt:'',updatedAt:''},
+  {id:'rc_method_sop',name:'Method (SOP)',status:'active',createdAt:'',updatedAt:''},
+  {id:'rc_material',name:'Material',status:'active',createdAt:'',updatedAt:''},
+  {id:'rc_measurement',name:'Measurement',status:'active',createdAt:'',updatedAt:''},
+  {id:'rc_environment',name:'Environment',status:'active',createdAt:'',updatedAt:''}
+];
+function normalizeRootCausesData(list){
+  var rows=Array.isArray(list)?list.slice():DEF_ROOT_CAUSES.slice();
+  var changed=!Array.isArray(list);
+  var seen={};
+  rows=rows.map(function(raw,idx){
+    var item=(raw&&typeof raw==='object')?Object.assign({},raw):{name:String(raw||'').trim()};
+    var name=String(item.name||item.label||item.text||'').trim();
+    if(!name){changed=true;return null;}
+    var key=name.toLowerCase();
+    if(seen[key]){changed=true;return null;}
+    seen[key]=true;
+    if(!item.id){item.id='rc_'+Date.now()+'_'+idx;changed=true;}
+    if(item.name!==name){item.name=name;changed=true;}
+    if(item.status!=='inactive'&&item.status!=='active'){item.status='active';changed=true;}
+    if(!item.createdAt){item.createdAt=new Date().toISOString();changed=true;}
+    if(!item.updatedAt){item.updatedAt=item.createdAt;changed=true;}
+    return item;
+  }).filter(Boolean);
+  return{value:rows,changed:changed};
+}
 function normalizeEmailTemplates(list){
   var rows=Array.isArray(list)?list.slice():[];
   var changed=false;
@@ -924,6 +954,7 @@ const APP={
   get emailMaster() {return LS.init('ap_email_master',buildDefaultEmailMaster());}, set emailMaster(v){LS.set('ap_email_master',v);},
   get emailTemplates(){var r=normalizeEmailTemplates(LS.init('ap_email_templates',DEF_EMAIL_TEMPLATES));if(r.changed)LS.set('ap_email_templates',r.value);return r.value;}, set emailTemplates(v){LS.set('ap_email_templates',normalizeEmailTemplates(v).value);},
   get emailLogs()   {return LS.get('ap_email_logs',[]);},          set emailLogs(v) {LS.set('ap_email_logs',v);},
+  get rootCauses()  {var r=normalizeRootCausesData(LS.init('ap_root_causes',DEF_ROOT_CAUSES));if(r.changed)LS.set('ap_root_causes',r.value);return r.value;}, set rootCauses(v){LS.set('ap_root_causes',normalizeRootCausesData(v).value);},
   get mediaLibrary(){return LS.get('ap_media_library',[]);},        set mediaLibrary(v){LS.set('ap_media_library',v);},
   get escalationMatrix(){return LS.init('ap_escalation_matrix',DEF_ESCALATION_MATRIX);}, set escalationMatrix(v){LS.set('ap_escalation_matrix',v);},
   get session()     {return LS.get('ap_sess',null);},              set session(v)    {if(v)LS.set('ap_sess',v);else LS.del('ap_sess');},
@@ -951,6 +982,7 @@ const APP={
   mdTab:'depts',
   emailSearch:'',
   emailTemplateId:'tpl_audit_submission',
+  editRootCauseRecord:null,
   mdCpPage:1,
   mediaCategoryFilter:'all',
   mediaSearch:'',
@@ -1011,6 +1043,8 @@ function initApiSync(){
     if(Object.keys(missing).length){
       _apiFetch('/api/sync/bulk',{method:'POST',body:JSON.stringify({items:missing,by:(APP.currentUser&&APP.currentUser.loginId)||'browser-seed'})}).catch(function(e){console.warn('Initial MongoDB seed:',e.message);});
     }
+
+    if(typeof repairCompletedAuditScores==='function')repairCompletedAuditScores();
 
     if(updated){
       if(typeof renderPage==='function'&&typeof APP!=='undefined')renderPage(APP.currentPage);
@@ -1429,6 +1463,35 @@ function auditFindingCounts(findings){
 function auditScoreFromSessionFindings(session){
   return auditScore(Object.values((session&&session.findings)||{}));
 }
+function completedAuditKey(audit){
+  if(!audit)return '';
+  var primary=audit.ref||audit.auditRef||audit.id||audit.auditId||'';
+  if(primary)return [audit.dept||'',primary].join('|').toLowerCase();
+  return [audit.dept||'',audit.submittedAt||audit.date||''].join('|').toLowerCase();
+}
+function derivedCompletedAuditsFromFindings(existing){
+  if(typeof APP==='undefined'||!APP.findings)return [];
+  var existingKeys=new Set((existing||[]).map(completedAuditKey).filter(Boolean));
+  var groups={};
+  (APP.findings||[]).forEach(function(f){
+    if(!f||!f.dept)return;
+    var date=f.auditSubmittedAt||f.submittedAt||f.createdAt||f.date||'';
+    var d=parseAuditDate(date);
+    var day=d?d.toISOString().slice(0,10):String(date||'').slice(0,10);
+    var auditRef=String(f.auditRef||f.auditId||'').trim();
+    var key=f.dept+'|'+(auditRef||('findings-'+day));
+    if(!groups[key]){
+      var dept=APP.depts.find(function(x){return x.code===f.dept;})||{code:f.dept,name:f.dept};
+      groups[key]={dept:f.dept,deptName:f.deptName||dept.name,ref:auditRef||('AUTO-'+f.dept+'-'+(day||Date.now())),submittedAt:date||new Date().toISOString(),date:date||new Date().toISOString(),rows:[]};
+    }
+    groups[key].rows.push(f);
+  });
+  return Object.keys(groups).map(function(key){
+    var g=groups[key],counts=auditFindingCounts(g.rows);
+    var audit={id:'derived_'+key.replace(/[^a-z0-9]+/gi,'_').toLowerCase(),ref:g.ref,dept:g.dept,deptName:g.deptName,status:'submitted',submittedAt:g.submittedAt,date:g.date,findingRefs:g.rows.map(function(f){return f.ref;}).filter(Boolean),auditScoreFrozen:scoreFromFindingCounts(counts),auditFindingCountsFrozen:counts,derivedFromFindings:true};
+    return existingKeys.has(completedAuditKey(audit))?null:audit;
+  }).filter(Boolean);
+}
 function normalizeCompletedAuditsData(data){
   if(!Array.isArray(data))return{value:[],changed:!!data};
   var changed=false;
@@ -1442,9 +1505,15 @@ function normalizeCompletedAuditsData(data){
       if(audit.auditScoreFrozen!==frozen){updates.auditScoreFrozen=frozen;changed=true;}
     }else if(audit.session&&audit.session.findings){
       updates.auditScoreFrozen=auditScoreFromSessionFindings(audit.session);changed=true;
+    }else if(typeof auditFindingRows==='function'){
+      var rows=auditFindingRows(audit);
+      if(rows.length){updates.auditScoreFrozen=auditScore(rows);changed=true;}
     }
     if(!audit.auditFindingCountsFrozen&&audit.session&&audit.session.findings){
       updates.auditFindingCountsFrozen=auditFindingCounts(Object.values(audit.session.findings));changed=true;
+    }else if(!audit.auditFindingCountsFrozen&&typeof auditFindingRows==='function'){
+      var countRows=auditFindingRows(audit);
+      if(countRows.length){updates.auditFindingCountsFrozen=auditFindingCounts(countRows);changed=true;}
     }
     if(!String(audit.status||'').trim()){updates.status='submitted';changed=true;}
     return Object.keys(updates).length?Object.assign({},audit,updates):audit;
@@ -1453,6 +1522,11 @@ function normalizeCompletedAuditsData(data){
 }
 function repairCompletedAuditScores(){
   var fixed=normalizeCompletedAuditsData(LS.get('ap_completed_audits',[]));
+  var derived=derivedCompletedAuditsFromFindings(fixed.value);
+  if(derived.length){
+    fixed.value=fixed.value.concat(derived);
+    fixed.changed=true;
+  }
   if(fixed.changed){
     LS.set('ap_completed_audits',fixed.value);
     return true;
@@ -1460,7 +1534,9 @@ function repairCompletedAuditScores(){
   return false;
 }
 function completedAuditsSorted(deptCode){
-  return normalizeCompletedAuditsData(LS.get('ap_completed_audits',[])||[]).value.filter(function(a){return (!deptCode||a.dept===deptCode)&&(!a.status||a.status==='submitted');}).slice().sort(function(a,b){
+  var normalized=normalizeCompletedAuditsData(LS.get('ap_completed_audits',[])||[]).value;
+  var derived=derivedCompletedAuditsFromFindings(normalized);
+  return normalized.concat(derived).filter(function(a){return (!deptCode||a.dept===deptCode)&&(!a.status||a.status==='submitted');}).slice().sort(function(a,b){
     return new Date(a.submittedAt||a.date||0)-new Date(b.submittedAt||b.date||0);
   });
 }
@@ -1470,6 +1546,10 @@ function frozenAuditScore(audit){
   if(Number.isFinite(frozen))return Math.min(100,Math.max(0,Math.round(frozen)));
   if(audit.auditFindingCountsFrozen)return scoreFromFindingCounts(audit.auditFindingCountsFrozen);
   if(audit.session&&audit.session.findings)return auditScoreFromSessionFindings(audit.session);
+  if(typeof auditFindingRows==='function'){
+    var rows=auditFindingRows(audit);
+    if(rows.length)return auditScore(rows);
+  }
   return null;
 }
 function latestDeptAudit(deptCode){
@@ -2013,6 +2093,16 @@ function requiredCcEmails(toList){
   return [...new Set(getRequiredCcEmails().filter(Boolean))]
     .filter(email=>!toSet.has(String(email).toLowerCase()));
 }
+function populateRootCauseSelect(selected){
+  var sel=el('fm-rc');if(!sel)return;
+  var rows=(APP.rootCauses||[]).filter(function(r){return r&&r.status!=='inactive'&&String(r.name||'').trim();});
+  if(!rows.length){sel.innerHTML='<option value="">Unclassified</option>';return;}
+  var current=String(selected||'').trim();
+  var hasCurrent=!current||rows.some(function(r){return String(r.name).toLowerCase()===current.toLowerCase();});
+  sel.innerHTML=(hasCurrent?'':'<option value="'+sanitize(current)+'">'+sanitize(current)+' (inactive)</option>')+
+    rows.map(function(r){var name=String(r.name||'').trim();return '<option value="'+sanitize(name)+'" '+(name===current?'selected':'')+'>'+sanitize(name)+'</option>';}).join('');
+  if(current)sel.value=current;
+}
 function addEmailDashboardAccess(text,html){
   const url=appDashboardUrl();
   const linkHtml='<p style="margin-top:14px;"><a href="'+sanitize(url)+'" style="background:#c0392b;color:#fff;text-decoration:none;padding:9px 14px;border-radius:6px;font-weight:700;display:inline-block;">Visit / Login to Dashboard</a></p>';
@@ -2039,6 +2129,16 @@ function sendEmail(to,subject,text,html,cc,attachments){
   }).catch(function(e){
     showToast('❌ Email failed: '+e.message);
     throw e;
+  });
+}
+function verifyEmailSetup(){
+  showToast('Checking email service...');
+  return _apiFetch('/api/email/verify').then(function(data){
+    showToast('Email service verified for '+(data.user||'configured SMTP'),5000);
+    return true;
+  }).catch(function(e){
+    showToast('Email verification failed: '+e.message,6000);
+    return false;
   });
 }
 function logEmail(type,to,cc,subject,status,attachment,error){
@@ -2916,6 +3016,7 @@ function openFinding(qId,qText,aiSug){
   el('fm-qt').textContent='"'+(qText||qId)+'"';
   el('fm-ai').textContent='🤖 '+(aiSug||'No similar past findings.');
   el('fm-desc').value='';el('fm-cont').value='';el('fm-sev').value='major';el('fm-prev').innerHTML='';
+  populateRootCauseSelect();
   openM('m-finding');
 }
 function promptFinding(qId,qText,aiSug){setTimeout(()=>{if(!AS.findings[qId])openFinding(qId,qText,aiSug);},150);}
@@ -2926,6 +3027,7 @@ function editFinding(qId){
   el('fm-qt').textContent='"'+(q?.text||qId)+'"';
   el('fm-ai').textContent='🤖 '+(q?.aiSuggestion||'No past findings.');
   el('fm-desc').value=f.desc||'';el('fm-cont').value=f.cont||'';el('fm-sev').value=f.severity||'major';
+  populateRootCauseSelect(f.rc||'');
   renderPreviews('fm-prev',APP.evidenceFiles);openM('m-finding');
 }
 function saveFinding(){
@@ -3953,18 +4055,46 @@ function exportMediaIndex(){
 // ═══════════════════════════════════════════════════
 // MASTER DATA
 // ═══════════════════════════════════════════════════
-function renderMasterdata(){return`<div class="tabs" id="mdt"><div class="tab ${APP.mdTab==='depts'?'active':''}" onclick="setMdTab('depts',this)">Departments</div><div class="tab ${APP.mdTab==='cps'?'active':''}" onclick="setMdTab('cps',this)">Internal Checkpoints</div><div class="tab ${APP.mdTab==='auds'?'active':''}" onclick="setMdTab('auds',this)">Auditors</div><div class="tab ${APP.mdTab==='emailmaster'?'active':''}" onclick="setMdTab('emailmaster',this)">Email Master</div><div class="tab ${APP.mdTab==='emailtemplates'?'active':''}" onclick="setMdTab('emailtemplates',this)">Email Templates</div><div class="tab ${APP.mdTab==='emaillogs'?'active':''}" onclick="setMdTab('emaillogs',this)">Email Logs</div></div><div id="md-body"></div>`;}
+function renderMasterdata(){return`<div class="tabs" id="mdt"><div class="tab ${APP.mdTab==='depts'?'active':''}" onclick="setMdTab('depts',this)">Departments</div><div class="tab ${APP.mdTab==='cps'?'active':''}" onclick="setMdTab('cps',this)">Internal Checkpoints</div><div class="tab ${APP.mdTab==='rootcauses'?'active':''}" onclick="setMdTab('rootcauses',this)">Root Causes</div><div class="tab ${APP.mdTab==='auds'?'active':''}" onclick="setMdTab('auds',this)">Auditors</div><div class="tab ${APP.mdTab==='emailmaster'?'active':''}" onclick="setMdTab('emailmaster',this)">Email Master</div><div class="tab ${APP.mdTab==='emailtemplates'?'active':''}" onclick="setMdTab('emailtemplates',this)">Email Templates</div><div class="tab ${APP.mdTab==='emaillogs'?'active':''}" onclick="setMdTab('emaillogs',this)">Email Logs</div></div><div id="md-body"></div>`;}
 function renderMdContent(){renderMdBody();}
 function setMdTab(t,e){APP.mdTab=t;document.querySelectorAll('#mdt .tab').forEach(x=>x.classList.remove('active'));e.classList.add('active');renderMdBody();}
 function renderMdBody(){
   const mc=el('md-body');if(!mc)return;const canEdit=APP.currentUser?.role==='admin';
   if(APP.mdTab==='depts'){mc.innerHTML=`<div class="card"><div class="fb mb2"><div class="ch" style="margin:0"><span class="dot" style="background:var(--brand)"></span>Departments (${APP.depts.length})</div>${canEdit?`<button class="btn btn-brand btn-sm" onclick="openDeptModal()">+ Add</button>`:''}</div><div class="tw"><table><thead><tr><th>Code</th><th>Name</th><th>SPOC</th><th>Risk</th><th>Freq</th><th>Last Audit</th>${canEdit?'<th>Actions</th>':''}</tr></thead><tbody>${APP.depts.map(d=>`<tr><td class="pr">${d.code}</td><td>${d.name}</td><td>${d.spoc}</td><td>${badge(d.risk==='High'?'b-red':d.risk==='Low'?'b-green':'b-amber',d.risk)}</td><td>${d.freq}/yr</td><td>${d.lastAudit||'—'}</td>${canEdit?`<td class="flex g1u"><button class="btn btn-ghost btn-sm" onclick="editDept(this.dataset.did)" data-did="${d.id}">✏️</button><button class="btn btn-danger btn-sm" onclick="delDept(this.dataset.did)" data-did="${d.id}">🗑</button></td>`:''}</tr>`).join('')}</tbody></table></div></div>`;}
   if(APP.mdTab==='cps'){mc.innerHTML=`<div class="card"><div class="fb mb2"><div class="ch" style="margin:0"><span class="dot" style="background:var(--teal)"></span>Checkpoints (${APP.checkpoints.length})</div>${canEdit?`<button class="btn btn-brand btn-sm" onclick="openCpModal()">+ Add</button>`:''}</div>${!canEdit?`<div class="info-box mb2">🔒 Only Master Admin can add/edit/delete checkpoints.</div>`:''}<div class="tw"><table><thead><tr><th>ID</th><th>Question</th><th>Clause</th><th>Dept</th><th>Risk</th>${canEdit?'<th>Actions</th>':''}</tr></thead><tbody>${(function(){const allCps=APP.checkpoints;const mdPg=APP.mdCpPage||1;const mdPs=15;const mdTotal=allCps.length;const mdPageCps=allCps.slice((mdPg-1)*mdPs,mdPg*mdPs);return mdPageCps.map(cp=>`<tr><td class="pr">${cp.id}</td><td style="max-width:220px;font-size:12px;">${cp.text}</td><td>${badge('b-blue',cp.clause||'—')}</td><td>${cp.dept||'All'}</td><td><span style="color:var(--${cp.weight>=5?'red':cp.weight>=4?'amber':'teal'});font-weight:800;">${cp.weight}/5</span></td>${canEdit?`<td class="flex g1u"><button class="btn btn-ghost btn-sm" onclick="editCp(this.dataset.cid)" data-cid="${cp.id}">✏️</button><button class="btn btn-danger btn-sm" onclick="delCp(this.dataset.cid)" data-cid="${cp.id}">🗑</button></td>`:''}</tr>`).join('');})()}</tbody></table></div>${renderPagination(APP.checkpoints.length,APP.mdCpPage||1,15,'setMdCpPage')}<div class="txs td mt1">${APP.checkpoints.length} checkpoint(s)</div></div>`;}
+  if(APP.mdTab==='rootcauses'){mc.innerHTML=renderRootCauses(canEdit);}
   if(APP.mdTab==='auds'){mc.innerHTML=`<div class="card"><div class="fb mb2"><div class="ch" style="margin:0"><span class="dot" style="background:var(--purple)"></span>Auditors (${APP.auditors.length})</div>${canEdit?`<button class="btn btn-brand btn-sm" onclick="openAudModal()">+ Add</button>`:''}</div><div class="tw"><table><thead><tr><th>Name</th><th>Emp ID</th><th>Cert</th><th>Spec</th><th>YTD</th><th>Status</th>${canEdit?'<th>Actions</th>':''}</tr></thead><tbody>${APP.auditors.map(a=>`<tr><td class="pr">${a.name}</td><td>${a.empId||'—'}</td><td>${a.cert}</td><td>${a.spec}</td><td>${a.auditsYTD||0}</td><td>${badge(a.status==='active'?'b-green':'b-gray',a.status==='active'?'Active':'Inactive')}</td>${canEdit?`<td class="flex g1u"><button class="btn btn-ghost btn-sm" onclick="editAud(this.dataset.aid)" data-aid="${a.id}">✏️</button><button class="btn btn-danger btn-sm" onclick="delAud(this.dataset.aid)" data-aid="${a.id}">🗑</button></td>`:''}</tr>`).join('')}</tbody></table></div></div>`;}
   if(APP.mdTab==='emailmaster'){mc.innerHTML=renderEmailMaster(canEdit);}
   if(APP.mdTab==='emailtemplates'){mc.innerHTML=renderEmailTemplates(canEdit);}
   if(APP.mdTab==='emaillogs'){mc.innerHTML=renderEmailLogs();}
   if(APP.mdTab==='clauses_disabled'){mc.innerHTML=`<div class="card"><div class="ch"><span class="dot" style="background:var(--amber)"></span>AS9100D Clause Reference</div><div class="tw"><table><thead><tr><th>Clause</th><th>Title</th><th>Checkpoints</th><th>Compliance</th></tr></thead><tbody>${[['§4','Context',6,96,'green'],['§5','Leadership',8,93,'green'],['§6','Planning',5,81,'amber'],['§7','Support',12,88,'green'],['§7.1.5','Monitoring & Measurement',4,71,'red'],['§8','Operation',24,69,'red'],['§8.4','Externally Provided Processes',8,78,'amber'],['§8.5.2','Identification & Traceability',6,64,'red'],['§9','Performance Evaluation',10,79,'amber'],['§10','Improvement',7,72,'red'],['§10.2','Nonconformity & CA',5,76,'amber']].map(([c,t,n,s,cl])=>`<tr><td class="pr">${c}</td><td>${t}</td><td>${n}</td><td style="color:var(--${cl});font-weight:800">${s}%</td></tr>`).join('')}</tbody></table></div></div>`;}
+}
+function renderRootCauses(canEdit){
+  const rows=APP.rootCauses||[];
+  const activeRows=rows.filter(r=>r.status!=='inactive');
+  const edit=APP.editRootCauseRecord||{};
+  return `<div class="grid g21 sg"><div class="card"><div class="fb mb2"><div class="ch" style="margin:0"><span class="dot" style="background:var(--amber)"></span>Root Cause Library (${rows.length})</div>${canEdit?`<button class="btn btn-brand btn-sm" onclick="APP.editRootCauseRecord=null;renderMdBody();setTimeout(()=>el('rc-name')?.focus(),40)">+ Add</button>`:''}</div>${!canEdit?`<div class="info-box mb2">Only Master Admin can add/edit/delete root cause names.</div>`:''}<div class="tw"><table><thead><tr><th>Name</th><th>Status</th><th>Used In Findings</th>${canEdit?'<th>Actions</th>':''}</tr></thead><tbody>${rows.map(function(r){var used=(APP.findings||[]).filter(f=>String(f.rc||'').toLowerCase()===String(r.name||'').toLowerCase()).length;return `<tr><td class="pr">${sanitize(r.name)}</td><td>${badge(r.status==='active'?'b-green':'b-gray',r.status==='active'?'Active':'Inactive')}</td><td>${used}</td>${canEdit?`<td class="flex g1u"><button class="btn ${APP.editRootCauseRecord&&APP.editRootCauseRecord.id===r.id?'btn-primary':'btn-ghost'} btn-sm" onclick="editRootCause('${sanitize(r.id)}')">Edit</button><button class="btn btn-danger btn-sm" onclick="deleteRootCause('${sanitize(r.id)}')">Delete</button></td>`:''}</tr>`;}).join('')||'<tr><td colspan="4" style="text-align:center;color:var(--text3);padding:12px;">No root causes configured</td></tr>'}</tbody></table></div><div class="txs td mt2">${activeRows.length} active root cause(s) available while logging findings.</div></div><div class="card"><div class="ch"><span class="dot" style="background:var(--brand)"></span>${edit.id?'Edit Root Cause':'Add Root Cause'}</div>${canEdit?`<div style="display:flex;flex-direction:column;gap:8px;"><div><label class="lbl">Root Cause Name</label><input id="rc-name" value="${sanitize(edit.name||'')}" placeholder="Example: Method (SOP)"></div><div><label class="lbl">Status</label><select id="rc-status"><option value="active" ${edit.status!=='inactive'?'selected':''}>Active</option><option value="inactive" ${edit.status==='inactive'?'selected':''}>Inactive</option></select></div><input type="hidden" id="rc-id" value="${sanitize(edit.id||'')}"><div class="flex g2u"><button class="btn btn-brand wf" onclick="saveRootCause()">Save Root Cause</button><button class="btn btn-ghost" onclick="APP.editRootCauseRecord=null;renderMdBody()">Clear</button></div><div class="txs td">Deleting does not rewrite old findings; historical root cause text remains preserved.</div></div>`:'<div class="txs td">Root causes are managed by Master Admin.</div>'}</div></div>`;
+}
+function saveRootCause(){
+  const name=String(el('rc-name')?.value||'').trim();
+  if(!name){showToast('Root cause name required');return;}
+  const rows=APP.rootCauses;
+  const id=el('rc-id')?.value||('rc_'+Date.now());
+  if(rows.some(r=>r.id!==id&&String(r.name||'').toLowerCase()===name.toLowerCase())){showToast('Root cause already exists');return;}
+  const existing=rows.find(r=>r.id===id)||{};
+  const obj={id,name,status:el('rc-status')?.value||'active',createdAt:existing.createdAt||new Date().toISOString(),updatedAt:new Date().toISOString()};
+  const idx=rows.findIndex(r=>r.id===id);
+  if(idx>=0)rows[idx]=obj;else rows.unshift(obj);
+  APP.rootCauses=rows;APP.editRootCauseRecord=null;renderMdBody();showToast('Root cause saved');
+}
+function editRootCause(id){APP.editRootCauseRecord=(APP.rootCauses||[]).find(r=>r.id===id)||null;renderMdBody();setTimeout(()=>el('rc-name')?.focus(),40);}
+function deleteRootCause(id){
+  const row=(APP.rootCauses||[]).find(r=>r.id===id);
+  if(!row)return;
+  confirmAct('Delete root cause "'+row.name+'"? Existing findings keep their saved text.',function(){
+    APP.rootCauses=(APP.rootCauses||[]).filter(r=>r.id!==id);
+    APP.editRootCauseRecord=null;renderMdBody();showToast('Root cause deleted');
+  });
 }
 // Email automation module
 function emailTpl(type){return (APP.emailTemplates||[]).find(t=>t.type===type&&t.active!==false)||(APP.emailTemplates||[]).find(t=>t.type===type)||DEF_EMAIL_TEMPLATES.find(t=>t.type===type)||{};}
@@ -4022,6 +4152,7 @@ function renderCcManager(){
 <div class="flex g2u">
 <input id="cc-new-email" type="email" placeholder="Add new CC email address..." style="flex:1;min-width:200px;" onkeydown="if(event.key==='Enter')addCcEmail()">
 <button class="btn btn-primary btn-sm" onclick="addCcEmail()">+ Add CC</button>
+<button class="btn btn-ghost btn-sm" onclick="verifyEmailSetup()">Check SMTP</button>
 <button class="btn btn-ghost btn-sm" onclick="resetCcEmails()" title="Reset to defaults">↺ Reset</button>
 </div>
 </div>`;
@@ -4292,7 +4423,7 @@ function managerSendSummary(){
   const to=['ankit.chittora@onepws.com'];
   const cc=['puneet@onepws.com','kanishka@onepws.com','process@onepws.com','jatin.chouhan@onepws.com'];
   const dateStr=new Date().toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'});
-  const subject='Consolidated NC Status Report of Each Department – '+dateStr;
+  const subject='Consolidated NC Status Report of Each Department - '+dateStr;
   const html='<h3>'+sanitize(subject)+'</h3>'+ncTable(rows);
   sendLoggedEmail('manager_summary',to,cc,subject,html.replace(/<[^>]+>/g,' '),html,'');
 }
@@ -5326,6 +5457,7 @@ function doOpenFinding(qId,qText,aiSug){
   el('fm-qt').textContent='"'+(qText||qId)+'"';
   el('fm-ai').textContent='🤖 '+(aiSug||'No similar past findings for this checkpoint.');
   el('fm-desc').value='';el('fm-cont').value='';el('fm-sev').value='major';el('fm-prev').innerHTML='';
+  populateRootCauseSelect();
   openM('m-finding');
 }
 
@@ -5337,6 +5469,7 @@ function doEditFinding(qId){
   el('fm-qt').textContent='"'+(cp?.text||qId)+'"';
   el('fm-ai').textContent='🤖 '+(cp?.aiSuggestion||'No past findings.');
   el('fm-desc').value=f.desc||'';el('fm-cont').value=f.cont||'';el('fm-sev').value=f.severity||'major';
+  populateRootCauseSelect(f.rc||'');
   renderPreviews('fm-prev',APP.evidenceFiles);openM('m-finding');
 }
 

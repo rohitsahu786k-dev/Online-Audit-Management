@@ -37,6 +37,8 @@ const SYNC_KEYS = [
   'ap_email_master',
   'ap_email_templates',
   'ap_email_logs',
+  'ap_required_cc_emails',
+  'ap_root_causes',
   'ap_media_library',
   'ap_escalation_matrix'
 ];

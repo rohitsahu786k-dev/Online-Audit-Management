@@ -100,9 +100,11 @@ async function main() {
 
     await clickNav(page, 'planning');
     await page.waitForSelector('#cal-grid', { timeout: 10000 });
+    const now = new Date();
+    const scheduleDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     await page.selectOption('#na-dept', { index: 1 });
     await page.selectOption('#na-aud', { index: 0 });
-    await page.fill('#na-date', '2026-05-26');
+    await page.fill('#na-date', scheduleDate);
     await page.click('#schedule-audit-btn');
     await page.waitForFunction(() => JSON.parse(localStorage.getItem('ap_planned_audits') || '[]').length === 1, null, { timeout: 10000 });
     if (!(await page.locator('#planning-list').innerText()).includes('Pre-Sales')) issues.push('Scheduled audit did not appear in planning list');
