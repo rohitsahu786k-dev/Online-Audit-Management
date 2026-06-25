@@ -4415,7 +4415,7 @@ function managerSendDeptReminder(code){
   const subject='Overdue NCs - '+d.name;
   const vars={department_name:d.name,spoc_name:rec.spocName,nc_count:rows.length,nc_number:first.ref||'',target_date:first.due||'',delay_days:delayDays(first),clause_name:clauseName(first.clause),clause_description:clauseDescription(first.clause),nc_table:ncTable(rows),window_days:5,escalation_level:'Manager'};
   const html=replaceTemplate(tpl.body,vars);
-  const ccMerged=[...new Set(fixedCc.concat(rec.cc))];
+  const ccMerged=[...new Set(fixedCc)];
   sendLoggedEmail(type,spocTo.length?spocTo:rec.to,ccMerged,subject,html.replace(/<[^>]+>/g,' '),html,'').then(()=>showToast('Department reminder sent/logged'));
 }
 function managerSendSummary(){
