@@ -718,7 +718,9 @@ function _refreshAfterSync(k){
   };
   var pages=relevantPages[k]||[];
   if(k==='ap_finds'&&typeof processOverdueFindings==='function'){
-    processOverdueFindings({sendEmail:true,source:'sync'});
+    // Only mark findings as delayed (status update) — do NOT send emails from sync poll.
+    // Emails are sent only by the scheduled background check, not on every 15s poll.
+    processOverdueFindings({sendEmail:false,source:'sync'});
   }
   if(pages.indexOf(page)>-1)renderPage(page);
   if(typeof buildNav==='function')buildNav();
@@ -1082,7 +1084,8 @@ function initApiSync(){
     }
 
     if(typeof repairCompletedAuditScores==='function')repairCompletedAuditScores();
-    if(typeof processOverdueFindings==='function')processOverdueFindings({sendEmail:true,source:'initial-sync'});
+    // Status update only on sync — email scheduler handles actual sending
+    if(typeof processOverdueFindings==='function')processOverdueFindings({sendEmail:false,source:'initial-sync'});
 
     if(updated){
       if(typeof renderPage==='function'&&typeof APP!=='undefined')renderPage(APP.currentPage);
@@ -1091,6 +1094,8 @@ function initApiSync(){
 
     _syncStatus='synced';_updateSyncUI();
     setInterval(pollApiSync,15000);
+    // Start the dedicated email scheduler AFTER first successful sync
+    if(typeof startEmailScheduler==='function')startEmailScheduler();
   }).catch(function(err){
     console.warn('Initial sync failed:',err);
     _syncStatus='offline';_updateSyncUI();
@@ -1128,6 +1133,29 @@ function pollApiSync(){
     console.warn('Poll sync failed:',err.message);
     _syncStatus='offline';_updateSyncUI();
   });
+}
+
+// ── DEDICATED EMAIL SCHEDULER ────────────────────────────────
+// Emails are ONLY sent by this scheduler — never on page load, navigation, or sync polls.
+// Runs once 60 seconds after login (to let data settle), then every 4 hours.
+var _emailSchedulerStarted=false;
+function startEmailScheduler(){
+  if(_emailSchedulerStarted)return;
+  _emailSchedulerStarted=true;
+  // First run: 60s after login (data has settled from initial sync)
+  setTimeout(function(){
+    if(typeof processOverdueFindings==='function'&&APP.currentUser){
+      console.log('[EmailScheduler] Running initial check...');
+      processOverdueFindings({sendEmail:true,source:'scheduler'});
+    }
+    // Then repeat every 4 hours
+    setInterval(function(){
+      if(typeof processOverdueFindings==='function'&&APP.currentUser){
+        console.log('[EmailScheduler] Running scheduled check...');
+        processOverdueFindings({sendEmail:true,source:'scheduler'});
+      }
+    },4*60*60*1000); // 4 hours
+  },60*1000); // 60 seconds after login
 }
 
 // Start sync after DOM ready
@@ -1957,7 +1985,8 @@ function initApp(){
   ensureRoleDefaults();
   repairFindingsStore();
   repairCompletedAuditScores();
-  if(typeof processOverdueFindings==='function')setTimeout(function(){processOverdueFindings({sendEmail:true,source:'startup'});},1800);
+  // Check for overdue findings on startup (status update only — no email on page load/navigation)
+  if(typeof processOverdueFindings==='function')setTimeout(function(){processOverdueFindings({sendEmail:false,source:'startup'});},1800);
   el('uname').textContent=u.name;
   el('urole').textContent=ROLE_LABELS[u.role]||u.role;
   const av=el('uav');
