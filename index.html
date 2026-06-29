@@ -620,7 +620,6 @@ input:focus,select:focus,textarea:focus{border-color:var(--brand);background:var
 // ═══════════════════════════════════════════════════
 const LOGO_SRC = 'assets/onepws-dark-logo-scaled.png';
 const OCP_PDF_SRC = 'assets/OCP_Manual_v4.3_Complete.pdf';
-const DEFAULT_REQUIRED_CC_EMAILS = ['ankit.chittora@onepws.com','process@onepws.com','jatin.chouhan@onepws.com'];
 const PUBLIC_APP_URL = 'https://audit.onepws.com';
 
 // ═══════════════════════════════════════════════════
@@ -802,137 +801,9 @@ function _updateSyncUI(){
 }
 
 // ═══════════════════════════════════════════════════
-// DEFAULT DATA
-// ═══════════════════════════════════════════════════
-const DEF_USERS=[
-  {id:'u1',loginId:'admin',  password:'Admin123!',name:'System Admin', role:'admin',  dept:'',   email:'admin@onepws.com',  active:true,avatar:'SA'},
-  {id:'u2',loginId:'rsharma',password:'Audit@123',name:'R. Sharma',    role:'auditor',dept:'',   email:'rsharma@onepws.com',active:true,avatar:'RS'},
-  {id:'u3',loginId:'spoc.str',password:'Spoc@123', name:'A. Gupta',     role:'spoc',   dept:'STR',email:'agupta@onepws.com', active:true,avatar:'AG'},
-  {id:'u4',loginId:'mgmt',   password:'View@123', name:'Plant Head',   role:'viewer', dept:'',   email:'mgmt@onepws.com',   active:true,avatar:'PH'},
-  {id:'u22',loginId:'manager',password:'Manager@123',name:'Department Manager',role:'manager',dept:'STR',email:'manager@onepws.com',active:true,avatar:'DM'},
-  {id:'u5',loginId:'spoc.pre',password:'Spoc@PRE',name:'SPOC Pre-Sales',role:'spoc',dept:'PRE',email:'spoc.pre@onepws.com',active:true,avatar:'PS'},
-  {id:'u6',loginId:'spoc.sal',password:'Spoc@SAL',name:'SPOC Sales',   role:'spoc',dept:'SAL',email:'spoc.sal@onepws.com',active:true,avatar:'SS'},
-  {id:'u7',loginId:'spoc.pex',password:'Spoc@PEX',name:'SPOC Project', role:'spoc',dept:'PEX',email:'spoc.pex@onepws.com',active:true,avatar:'SP'},
-  {id:'u8',loginId:'spoc.des',password:'Spoc@DES',name:'SPOC Design',  role:'spoc',dept:'DES',email:'spoc.des@onepws.com',active:true,avatar:'SD'},
-  {id:'u9',loginId:'spoc.pur',password:'Spoc@PUR',name:'SPOC Purchase',role:'spoc',dept:'PUR',email:'spoc.pur@onepws.com',active:true,avatar:'SP'},
-  {id:'u10',loginId:'spoc.prd',password:'Spoc@PRD',name:'SPOC Production',role:'spoc',dept:'PRD',email:'spoc.prd@onepws.com',active:true,avatar:'SP'},
-  {id:'u11',loginId:'spoc.mnt',password:'Spoc@MNT',name:'SPOC Maintenance',role:'spoc',dept:'MNT',email:'spoc.mnt@onepws.com',active:true,avatar:'SM'},
-  {id:'u12',loginId:'spoc.asm',password:'Spoc@ASM',name:'SPOC Assembly',role:'spoc',dept:'ASM',email:'spoc.asm@onepws.com',active:true,avatar:'SA'},
-  {id:'u13',loginId:'spoc.qal',password:'Spoc@QAL',name:'SPOC Quality',role:'spoc',dept:'QAL',email:'spoc.qal@onepws.com',active:true,avatar:'SQ'},
-  {id:'u14',loginId:'spoc.pck',password:'Spoc@PCK',name:'SPOC Packing',role:'spoc',dept:'PCK',email:'spoc.pck@onepws.com',active:true,avatar:'SP'},
-  {id:'u15',loginId:'spoc.dis',password:'Spoc@DIS',name:'SPOC Dispatch',role:'spoc',dept:'DIS',email:'spoc.dis@onepws.com',active:true,avatar:'SD'},
-  {id:'u16',loginId:'spoc.sps',password:'Spoc@SPS',name:'SPOC Paint Shop',role:'spoc',dept:'SPS',email:'spoc.sps@onepws.com',active:true,avatar:'SP'},
-  {id:'u17',loginId:'spoc.mr',password:'Spoc@MR', name:'SPOC MR',     role:'spoc',dept:'MR', email:'spoc.mr@onepws.com', active:true,avatar:'SM'},
-  {id:'u18',loginId:'spoc.hse',password:'Spoc@HSE',name:'SPOC HSE',   role:'spoc',dept:'HSE',email:'spoc.hse@onepws.com',active:true,avatar:'SH'},
-  {id:'u19',loginId:'spoc.hr',password:'Spoc@HR',  name:'SPOC HR',    role:'spoc',dept:'HR', email:'spoc.hr@onepws.com', active:true,avatar:'SH'},
-  {id:'u20',loginId:'spoc.it',password:'Spoc@IT',  name:'SPOC IT',    role:'spoc',dept:'IT', email:'spoc.it@onepws.com', active:true,avatar:'SI'},
-  {id:'u21',loginId:'spoc.iap',password:'Spoc@IAP',name:'SPOC Audit Process',role:'spoc',dept:'IAP',email:'spoc.iap@onepws.com',active:true,avatar:'SA'},
-];
-const DEF_DEPTS=[
-  {id:'d1', code:'PRE',name:'Pre-Sales',         spoc:'TBD',risk:'Low',   freq:2,lastAudit:'—'},
-  {id:'d2', code:'SAL',name:'Sales',             spoc:'TBD',risk:'Low',   freq:2,lastAudit:'—'},
-  {id:'d3', code:'PEX',name:'Project Execution', spoc:'TBD',risk:'High',  freq:4,lastAudit:'—'},
-  {id:'d4', code:'DES',name:'Design',            spoc:'TBD',risk:'High',  freq:4,lastAudit:'—'},
-  {id:'d5', code:'PUR',name:'Purchase',          spoc:'TBD',risk:'Medium',freq:3,lastAudit:'—'},
-  {id:'d6', code:'STR',name:'Stores',            spoc:'A. Gupta',risk:'Medium',freq:3,lastAudit:'—'},
-  {id:'d7', code:'PRD',name:'Production',        spoc:'TBD',risk:'High',  freq:6,lastAudit:'—'},
-  {id:'d8', code:'MNT',name:'Maintenance',       spoc:'S. Kaur',risk:'Medium',freq:4,lastAudit:'—'},
-  {id:'d9', code:'ASM',name:'Assembly',          spoc:'TBD',risk:'High',  freq:4,lastAudit:'—'},
-  {id:'d10',code:'QAL',name:'Quality',           spoc:'V. Jain',risk:'High',freq:6,lastAudit:'—'},
-  {id:'d11',code:'PCK',name:'Packing',           spoc:'TBD',risk:'Low',   freq:2,lastAudit:'—'},
-  {id:'d12',code:'DIS',name:'Dispatch',          spoc:'TBD',risk:'Medium',freq:2,lastAudit:'—'},
-  {id:'d13',code:'SPS',name:'Surtec Paint Shop', spoc:'TBD',risk:'Medium',freq:3,lastAudit:'—'},
-  {id:'d14',code:'MR', name:'MR (Mgmt Rep)',     spoc:'TBD',risk:'Low',   freq:2,lastAudit:'—'},
-  {id:'d15',code:'HSE',name:'HSE',               spoc:'TBD',risk:'High',  freq:4,lastAudit:'—'},
-  {id:'d16',code:'HR', name:'HR & Admin',        spoc:'TBD',risk:'Low',   freq:2,lastAudit:'—'},
-  {id:'d17',code:'IT', name:'IT',                spoc:'TBD',risk:'Low',   freq:2,lastAudit:'—'},
-  {id:'d18',code:'IAP',name:'Internal Audit/Process',spoc:'TBD',risk:'Medium',freq:4,lastAudit:'—'},
-];
-const DEF_AUDITORS=[
-  {id:'a1',name:'R. Sharma',empId:'EMP-001',cert:'CQA · AS9100 Lead',spec:'Production, Stores',email:'rsharma@onepws.com',status:'active',auditsYTD:8},
-  {id:'a2',name:'P. Mehta', empId:'EMP-002',cert:'AS9100 Internal',  spec:'QC, Purchase',      email:'pmehta@onepws.com', status:'active',auditsYTD:6},
-  {id:'a3',name:'K. Verma', empId:'EMP-003',cert:'ISO 9001 Lead',    spec:'Design, HR',         email:'kverma@onepws.com', status:'active',auditsYTD:4},
-];
+// DB-BACKED DATA
+// Shared business/master records are loaded from MongoDB sync keys, not seeded from browser code.
 const DEF_FINDINGS=[];
-const DEF_FINDINGS_OLD=[
-  {id:'f1',ref:'STR-2025-041',dept:'STR',deptName:'Stores',         desc:'Lot traceability failure — Lot #8821 not linked to batch records',sev:'critical',clause:'§8.5.2',due:'2025-06-15',status:'pending-closure',type:'new',   auditId:'a1',capaStatus:'submitted', closureEvidence:'Lot records reconciled manually. ERP patch deployed Jun 28.',closureFiles:[],closureSubmittedBy:'A. Gupta',closureDate:'2025-06-26',decision:null,decisionComments:'',decisionDate:null,activityLog:[{user:'R. Sharma',action:'Finding logged',ts:'Jun 15 10:42'},{user:'A. Gupta',action:'Closure submitted with evidence',ts:'Jun 26 14:20'}]},
-  {id:'f2',ref:'MNT-2025-038',dept:'MNT',deptName:'Maintenance',    desc:'Calibration records missing for 4 instruments',sev:'major',clause:'§7.1.5',due:'2025-06-30',status:'open',type:'repeat',auditId:'a2',capaStatus:'in-progress',closureEvidence:'',closureFiles:[],closureSubmittedBy:null,closureDate:null,decision:null,decisionComments:'',decisionDate:null,activityLog:[{user:'R. Sharma',action:'Finding logged',ts:'Jun 9 11:00'},{user:'S. Kaur',action:'Root cause: manual reminder system',ts:'Jun 14 09:30'}]},
-  {id:'f3',ref:'PUR-2025-036',dept:'PUR',deptName:'Purchase',       desc:'Supplier qualification overdue for 3 vendors',sev:'minor',clause:'§8.4',due:'2025-07-07',status:'open',type:'new',auditId:'a2',capaStatus:'open',closureEvidence:'',closureFiles:[],closureSubmittedBy:null,closureDate:null,decision:null,decisionComments:'',decisionDate:null,activityLog:[{user:'P. Mehta',action:'Finding logged',ts:'May 28 14:00'}]},
-  {id:'f4',ref:'STR-2025-033',dept:'STR',deptName:'Stores',         desc:'Storage temperature logs missing — 5 days',sev:'major',clause:'§8.5.3',due:'2025-06-20',status:'delayed',type:'repeat',auditId:'a1',capaStatus:'delayed',closureEvidence:'',closureFiles:[],closureSubmittedBy:null,closureDate:null,decision:null,decisionComments:'',decisionDate:null,activityLog:[{user:'R. Sharma',action:'Finding logged',ts:'Jun 15 11:30'},{user:'System',action:'Auto-escalated (overdue)',ts:'Jun 21 09:00'}]},
-  {id:'f5',ref:'QAL-2025-029',dept:'QAL',deptName:'Quality',        desc:'Inspection records not signed off by QE',sev:'minor',clause:'§8.6',due:'2025-06-20',status:'closed',type:'new',auditId:'a3',capaStatus:'closed',closureEvidence:'All records updated and countersigned.',closureFiles:[],closureSubmittedBy:'V. Jain',closureDate:'Jun 18',decision:'accept',decisionComments:'Evidence verified. Records complete.',decisionDate:'Jun 19 10:00',activityLog:[{user:'P. Mehta',action:'Finding logged',ts:'Jun 5 09:00'},{user:'V. Jain',action:'Closure submitted',ts:'Jun 18 14:00'},{user:'P. Mehta',action:'Closure accepted',ts:'Jun 19 10:00'}]},
-];
-const DEF_NOTIFS=[];
-const DEF_NOTIFS_OLD=[
-  {id:'n1',type:'finding',title:'New Critical Finding',body:'STR-2025-041: Lot traceability failure in Stores',ts:'Jun 15, 2:42 PM',read:false,link:'findings',roles:['admin','auditor','spoc','viewer']},
-  {id:'n2',type:'capa',   title:'CAPA Overdue',        body:'STR-2025-033 overdue by 5 days. Escalation triggered.',ts:'Jun 21, 9:00 AM',read:false,link:'capa',roles:['admin','auditor','spoc']},
-  {id:'n3',type:'closure',title:'Closure Request',     body:'A. Gupta submitted closure for STR-2025-041',ts:'Jun 26, 2:20 PM',read:false,link:'capa',roles:['admin','auditor']},
-  {id:'n4',type:'audit',  title:'Audit Scheduled',     body:'Stores Full Audit — R. Sharma',ts:'Jun 10, 11:00 AM',read:true,link:'planning',roles:['admin','auditor','spoc']},
-];
-// Checkpoints with all 18 depts
-const DEF_CPS=[
-  // Generic
-  {id:'cp1',text:'Are all controlled documents available at point of use?',clause:'§7.5.2',weight:4,type:'Yes/No',dept:'',tip:'Check doc registers on shopfloor',aiSuggestion:''},
-  {id:'cp2',text:'Are calibration records current and signed?',clause:'§7.1.5',weight:5,type:'Yes/No + Evidence',dept:'',tip:'Check calibration stickers',aiSuggestion:'Found missing in 5 previous audits.'},
-  {id:'cp3',text:'Are training records complete and current?',clause:'§7.2',weight:3,type:'Yes/No',dept:'',tip:'Cross-check training matrix',aiSuggestion:''},
-  {id:'cp4',text:'Are nonconforming products identified and segregated?',clause:'§8.7.1',weight:5,type:'Yes/No + Evidence',dept:'',tip:'Red tags must be present on NC items',aiSuggestion:'WH-2024-021: missing tags on 8 items.'},
-  // Stores
-  {id:'cp5',text:'Are lot numbers traceable to production batch records?',clause:'§8.5.2',weight:5,type:'Yes/No + Evidence',dept:'STR',tip:'Sample 3 lots — verify ERP linkage',aiSuggestion:'Similar issue found in STR-2024-018.'},
-  {id:'cp6',text:'Is FIFO/FEFO implemented for perishable materials?',clause:'§8.5.4',weight:4,type:'Yes/No',dept:'STR',tip:'Check date labels on 5+ racks',aiSuggestion:''},
-  {id:'cp7',text:'Are storage conditions (temp/humidity) monitored and logged?',clause:'§8.5.3',weight:4,type:'Yes/No + Evidence',dept:'STR',tip:'Review 30-day logger data',aiSuggestion:''},
-  // Production
-  {id:'cp8',text:'Are production processes controlled using work instructions?',clause:'§8.5.1',weight:5,type:'Yes/No + Evidence',dept:'PRD',tip:'WIs must be current at workstation',aiSuggestion:''},
-  {id:'cp9',text:'Are FAI conducted for new/revised parts?',clause:'§8.5.1',weight:5,type:'Yes/No + Evidence',dept:'PRD',tip:'Check FAI reports vs ECN register',aiSuggestion:''},
-  // Quality
-  {id:'cp10',text:'Are inspection records maintained with sign-off?',clause:'§8.6',weight:5,type:'Yes/No + Evidence',dept:'QAL',tip:'Spot-check 5 recent inspection reports',aiSuggestion:'QAL-2025-029: missing sign-offs.'},
-  {id:'cp11',text:'Is CAPA effectiveness verified and documented?',clause:'§10.2',weight:5,type:'Yes/No + Evidence',dept:'QAL',tip:'Verify at least 3 closed CARs',aiSuggestion:''},
-  // Purchase
-  {id:'cp12',text:'Is an Approved Vendor List maintained and reviewed?',clause:'§8.4.1',weight:5,type:'Yes/No + Evidence',dept:'PUR',tip:'Check AVL revision date',aiSuggestion:''},
-  // Design
-  {id:'cp13',text:'Are design changes approved via ECN process?',clause:'§8.3.6',weight:5,type:'Yes/No + Evidence',dept:'DES',tip:'Review last 3 ECNs for approval signatures',aiSuggestion:'ENG-2025-025: unapproved design change.'},
-  // Maintenance
-  {id:'cp14',text:'Is a PM schedule maintained and followed?',clause:'§7.1.3',weight:5,type:'Yes/No + Evidence',dept:'MNT',tip:'Check PM completion rate last month',aiSuggestion:''},
-  // HSE
-  {id:'cp15',text:'Is HIRA maintained and reviewed?',clause:'§6.1',weight:5,type:'Yes/No + Evidence',dept:'HSE',tip:'Check revision date and sign-off',aiSuggestion:''},
-  // HR
-  {id:'cp16',text:'Are competency records current for all personnel?',clause:'§7.2',weight:4,type:'Yes/No + Evidence',dept:'HR',tip:'Spot-check 5 employee training files',aiSuggestion:''},
-];
-const DEF_SECTIONS=[];
-const DEF_SECTIONS_SAMPLE=[
-  {id:'s0',title:'Document Control',clause:'§7.5',risk:'Medium',cpIds:['cp1','cp3']},
-  {id:'s1',title:'Storage & Traceability',clause:'§8.5.2',risk:'High',cpIds:['cp5','cp6','cp7']},
-  {id:'s2',title:'Nonconformance Mgmt',clause:'§8.7',risk:'High',cpIds:['cp4','cp10','cp11']},
-  {id:'s3',title:'Customer Focus',clause:'§8.2',risk:'Medium',cpIds:['cp12']},
-];
-const DEF_LEARNINGS=[];
-const DEF_LEARNINGS_SAMPLE=[
-  {id:'l1',title:'Lot Traceability — ERP Integration',dept:'STR',sev:'critical',clause:'§8.5.2',rc:'ERP integration gaps post-update.',pa:'Monthly data reconciliation. Integration test after any ERP patch.',repeat:true,crossDept:true},
-  {id:'l2',title:'Calibration Record Gaps',dept:'MNT',sev:'major',clause:'§7.1.5',rc:'Manual reminder system inadequate.',pa:'Digital calendar 30-day alerts. Monthly calibration due report.',repeat:true,crossDept:false},
-  {id:'l3',title:'Training Competence Matrix',dept:'',sev:'minor',clause:'§7.2',rc:'Training matrix not cross-referenced with job roles.',pa:'Quarterly competence review with dept heads.',repeat:false,crossDept:true},
-];
-const DEF_EMAIL_TEMPLATES=[
-  {id:'tpl_audit_submission',type:'audit_submission',name:'Audit Report Submission',active:true,subject:'Audit Report Submitted - {{department_name}}',body:'Dear {{spoc_name}},<br><br>The audit report for {{department_name}} has been submitted.<br><br><table border="1" cellpadding="6" cellspacing="0"><tr><th>Audit</th><th>Findings</th><th>Submitted</th></tr><tr><td>{{audit_name}}</td><td>{{nc_count}}</td><td>{{submitted_at}}</td></tr></table><br>{{nc_table}}<br>Regards,<br>Audit Team',updatedAt:''},
-  {id:'tpl_upcoming_reminder',type:'upcoming_reminder',name:'Upcoming Target Closure Reminder',active:true,subject:'Reminder: Pending NC Closure - {{department_name}}',body:'Dear {{spoc_name}},<br><br>The following NCs are due within {{window_days}} day(s).<br><br>{{nc_table}}<br>Please close the pending NCs at the earliest.<br><br>Regards,<br>Audit Team',updatedAt:''},
-  {id:'tpl_delayed',type:'delayed',name:'Delayed NC Notification',active:true,subject:'Overdue NCs - {{department_name}}',body:'Dear {{spoc_name}},<br><br>The following NCs have crossed the target closure date.<br><br>{{nc_table}}<br>Please submit closure evidence immediately.<br><br>Regards,<br>Audit Team',updatedAt:''},
-  {id:'tpl_escalation',type:'escalation',name:'Escalation Reminder',active:true,subject:'Escalation: Delayed NC Closure - {{department_name}}',body:'Dear {{spoc_name}},<br><br>The following NCs remain delayed and have reached escalation level {{escalation_level}}.<br><br>{{nc_table}}<br>Regards,<br>Audit Team',updatedAt:''}
-];
-// Escalation Matrix:
-// Tier 1: 3–6 days overdue  → Delayed NC email to SPOC only (every 3 days)
-// Tier 2: 7–14 days overdue → Escalate to HOD (SPOC in CC), frequency every 2 days
-// Tier 3: 14–21 days overdue→ Escalate to MD/Management (HOD + SPOC in CC), frequency once a month (30 days)
-const DEF_ESCALATION_MATRIX=[
-  {min:3,max:6,label:'3-6 Days',to:['spoc'],cc:[],frequencyDays:3},
-  {min:7,max:14,label:'7-14 Days (HOD)',to:['hod'],cc:['spoc'],frequencyDays:2},
-  {min:15,max:21,label:'15-21 Days (MD)',to:['management'],cc:['hod','spoc'],frequencyDays:30},
-  {min:22,max:9999,label:'22+ Days (MD)',to:['management'],cc:['hod','spoc'],frequencyDays:30}
-];
-const DEF_ROOT_CAUSES=[
-  {id:'rc_man_training',name:'Man (Training)',status:'active',createdAt:'',updatedAt:''},
-  {id:'rc_machine_system',name:'Machine/System',status:'active',createdAt:'',updatedAt:''},
-  {id:'rc_method_sop',name:'Method (SOP)',status:'active',createdAt:'',updatedAt:''},
-  {id:'rc_material',name:'Material',status:'active',createdAt:'',updatedAt:''},
-  {id:'rc_measurement',name:'Measurement',status:'active',createdAt:'',updatedAt:''},
-  {id:'rc_environment',name:'Environment',status:'active',createdAt:'',updatedAt:''}
-];
 function rootCauseKey(name){
   return String(name||'').trim().toLowerCase().replace(/&/g,'and').replace(/[^a-z0-9]+/g,'');
 }
@@ -963,7 +834,7 @@ function canonicalRootCauseName(name){
   return ROOT_CAUSE_ALIASES[key]||raw;
 }
 function normalizeRootCausesData(list){
-  var rows=Array.isArray(list)?list.slice():DEF_ROOT_CAUSES.slice();
+  var rows=Array.isArray(list)?list.slice():[];
   var changed=!Array.isArray(list);
   var seen={};
   rows=rows.map(function(raw,idx){
@@ -984,52 +855,30 @@ function normalizeRootCausesData(list){
   return{value:rows,changed:changed};
 }
 function normalizeEmailTemplates(list){
-  var rows=Array.isArray(list)?list.slice():[];
-  var changed=false;
-  DEF_EMAIL_TEMPLATES.forEach(function(def){
-    var t=rows.find(function(x){return x&&x.id===def.id;});
-    if(!t){rows.push(Object.assign({},def));changed=true;return;}
-    if(!t.type){t.type=def.type;changed=true;}
-    if(!t.name){t.name=def.name;changed=true;}
-    if(!t.subject){t.subject=def.subject;changed=true;}
-    if(!t.body){t.body=def.body;changed=true;}
-    if(t.type==='audit_submission'&&t.body.indexOf('{{nc_table}}')<0){
-      t.body=t.body+'<br><br>{{nc_table}}';
-      changed=true;
-    }
-  });
+  var rows=Array.isArray(list)?list.filter(function(t){return t&&typeof t==='object';}).map(function(t){return Object.assign({},t);}):[];
+  var changed=!Array.isArray(list)||rows.length!==list.length;
   return {value:rows,changed:changed};
 }
 function normalizeEscalationMatrixData(list){
   var rows=Array.isArray(list)?list.slice():[];
-  var changed=false;
-  DEF_ESCALATION_MATRIX.forEach(function(def){
-    var idx=rows.findIndex(function(x){
-      if(!x)return false;
-      if(x.label===def.label)return true;
-      if(def.min===3&&def.max===6&&Number(x.max)===6&&Number(x.frequencyDays||3)===3)return true;
-      return Number(x.min)===def.min&&Number(x.max)===def.max;
-    });
-    var next=Object.assign({},def);
-    if(idx>=0){
-      if(JSON.stringify(rows[idx])!==JSON.stringify(next)){rows[idx]=next;changed=true;}
-    }else{
-      rows.push(next);changed=true;
-    }
-  });
+  var changed=!Array.isArray(list);
+  rows=rows.map(function(raw,idx){
+    if(!raw||typeof raw!=='object'){changed=true;return null;}
+    var item=Object.assign({},raw);
+    item.min=Number(item.min)||0;
+    item.max=Number(item.max)||9999;
+    item.frequencyDays=Math.max(1,Number(item.frequencyDays)||1);
+    if(!item.label){item.label='Tier '+(idx+1);changed=true;}
+    if(!Array.isArray(item.to)){item.to=[];changed=true;}
+    if(!Array.isArray(item.cc)){item.cc=[];changed=true;}
+    return item;
+  }).filter(Boolean);
   rows=rows.filter(function(x,idx){
     if(!x)return false;
     if(Number(x.min)<3&&Number(x.max)<=6){changed=true;return false;}
     return rows.findIndex(function(y){return y&&y.label===x.label;})===idx;
   });
   return {value:rows,changed:changed};
-}
-function buildDefaultEmailMaster(){
-  return DEF_DEPTS.map(function(d){
-    var spoc=DEF_USERS.find(function(u){return u.role==='spoc'&&u.dept===d.code;})||{};
-    var manager=DEF_USERS.find(function(u){return u.role==='manager'&&u.dept===d.code;})||DEF_USERS.find(function(u){return u.role==='manager';})||DEF_USERS.find(function(u){return u.role==='admin';})||{};
-    return {id:'em_'+d.code,spocName:spoc.name||d.spoc||'',email:spoc.email||'',department:d.name,deptCode:d.code,reportingName:manager.name||'',reportingEmail:manager.email||'',hodEmail:'',managementEmail:manager.email||'',status:'active',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
-  });
 }
 const AUDIT_STANDARDS=[
   {id:'as9100d',label:'AS9100 Rev D',color:'var(--brand)'},
@@ -1045,21 +894,21 @@ const APP={
   _cu:null,
   get currentUser(){ return this._cu||LS.get('ap_cu',null); },
   set currentUser(v){ this._cu=v; if(v)LS.set('ap_cu',v); else LS.del('ap_cu'); },
-  get users()       {return LS.init('ap_users',DEF_USERS);},      set users(v)      {LS.set('ap_users',v);},
-  get depts()       {return LS.init('ap_depts',DEF_DEPTS);},      set depts(v)      {LS.set('ap_depts',v);},
-  get auditors()    {return LS.init('ap_auds',DEF_AUDITORS);},    set auditors(v)   {LS.set('ap_auds',v);},
-  get checkpoints() {return LS.init('ap_cps',DEF_CPS);},          set checkpoints(v){LS.set('ap_cps',v);},
-  get findings()    {const r=normalizeFindingsData(LS.init('ap_finds',DEF_FINDINGS));if(r.changed)LS.set('ap_finds',r.value);return r.value;},   set findings(v)   {LS.set('ap_finds',normalizeFindingsData(v).value);},
-  get notifications(){return LS.init('ap_notifs',DEF_NOTIFS);},   set notifications(v){LS.set('ap_notifs',v);},
-  get sections()    {return LS.init('ap_secs',DEF_SECTIONS);},    set sections(v)   {LS.set('ap_secs',v);},
-  get learnings()   {return LS.init('ap_learns',DEF_LEARNINGS);}, set learnings(v)  {LS.set('ap_learns',v);},
-  get standards()   {return LS.init('ap_stds',['as9100d']);},      set standards(v)  {LS.set('ap_stds',v);},
-  get emailMaster() {return LS.init('ap_email_master',buildDefaultEmailMaster());}, set emailMaster(v){LS.set('ap_email_master',v);},
-  get emailTemplates(){var r=normalizeEmailTemplates(LS.init('ap_email_templates',DEF_EMAIL_TEMPLATES));if(r.changed)LS.set('ap_email_templates',r.value);return r.value;}, set emailTemplates(v){LS.set('ap_email_templates',normalizeEmailTemplates(v).value);},
+  get users()       {return LS.get('ap_users',[]);},              set users(v)      {LS.set('ap_users',v);},
+  get depts()       {return LS.get('ap_depts',[]);},              set depts(v)      {LS.set('ap_depts',v);},
+  get auditors()    {return LS.get('ap_auds',[]);},               set auditors(v)   {LS.set('ap_auds',v);},
+  get checkpoints() {return LS.get('ap_cps',[]);},                set checkpoints(v){LS.set('ap_cps',v);},
+  get findings()    {const r=normalizeFindingsData(LS.get('ap_finds',[]));if(r.changed)LS.set('ap_finds',r.value);return r.value;},   set findings(v)   {LS.set('ap_finds',normalizeFindingsData(v).value);},
+  get notifications(){return LS.get('ap_notifs',[]);},            set notifications(v){LS.set('ap_notifs',v);},
+  get sections()    {return LS.get('ap_secs',[]);},               set sections(v)   {LS.set('ap_secs',v);},
+  get learnings()   {return LS.get('ap_learns',[]);},             set learnings(v)  {LS.set('ap_learns',v);},
+  get standards()   {return LS.get('ap_stds',[]);},               set standards(v)  {LS.set('ap_stds',v);},
+  get emailMaster() {return LS.get('ap_email_master',[]);},       set emailMaster(v){LS.set('ap_email_master',v);},
+  get emailTemplates(){var r=normalizeEmailTemplates(LS.get('ap_email_templates',[]));if(r.changed)LS.set('ap_email_templates',r.value);return r.value;}, set emailTemplates(v){LS.set('ap_email_templates',normalizeEmailTemplates(v).value);},
   get emailLogs()   {return LS.get('ap_email_logs',[]);},          set emailLogs(v) {LS.set('ap_email_logs',v);},
-  get rootCauses()  {var r=normalizeRootCausesData(LS.init('ap_root_causes',DEF_ROOT_CAUSES));if(r.changed)LS.set('ap_root_causes',r.value);return r.value;}, set rootCauses(v){LS.set('ap_root_causes',normalizeRootCausesData(v).value);},
+  get rootCauses()  {var r=normalizeRootCausesData(LS.get('ap_root_causes',[]));if(r.changed)LS.set('ap_root_causes',r.value);return r.value;}, set rootCauses(v){LS.set('ap_root_causes',normalizeRootCausesData(v).value);},
   get mediaLibrary(){return LS.get('ap_media_library',[]);},        set mediaLibrary(v){LS.set('ap_media_library',v);},
-  get escalationMatrix(){var r=normalizeEscalationMatrixData(LS.init('ap_escalation_matrix',DEF_ESCALATION_MATRIX));if(r.changed)LS.set('ap_escalation_matrix',r.value);return r.value;}, set escalationMatrix(v){LS.set('ap_escalation_matrix',normalizeEscalationMatrixData(v).value);},
+  get escalationMatrix(){var r=normalizeEscalationMatrixData(LS.get('ap_escalation_matrix',[]));if(r.changed)LS.set('ap_escalation_matrix',r.value);return r.value;}, set escalationMatrix(v){LS.set('ap_escalation_matrix',normalizeEscalationMatrixData(v).value);},
   get session()     {return LS.get('ap_sess',null);},              set session(v)    {if(v)LS.set('ap_sess',v);else LS.del('ap_sess');},
   currentPage:'dashboard',
   currentSection:0,
@@ -1081,7 +930,7 @@ const APP={
   pageSize:15,
   dateFrom:'',
   dateTo:'',
-  capaDueDays:LS.get('ap_capa_due',{critical:7,major:15,minor:30,obs:45}),
+  capaDueDays:LS.get('ap_capa_due',{}),
   mdTab:'depts',
   emailSearch:'',
   emailTemplateId:'tpl_audit_submission',
@@ -1117,7 +966,6 @@ function initApiSync(){
   }).then(function(payload){
     var cloud=payload.data||{};
     var updated=false;
-    var missing={};
 
     SYNC_KEYS.forEach(function(k){
       if(cloud[k]&&Object.prototype.hasOwnProperty.call(cloud[k],'value')){
@@ -1137,7 +985,7 @@ function initApiSync(){
           }
           return;
         }
-        if(remote!==null&&remote!==undefined&&(!local||JSON.stringify(remote).length>=JSON.stringify(local).length)){
+        if(remote!==null&&remote!==undefined&&JSON.stringify(remote)!==JSON.stringify(local)){
           localStorage.setItem(k,JSON.stringify(remote));
           updated=true;
         }
@@ -1145,16 +993,9 @@ function initApiSync(){
           _apiFetch('/api/sync/ap_finds',{method:'PUT',body:JSON.stringify({value:remote,by:(APP.currentUser&&APP.currentUser.loginId)||'browser-merge'})}).catch(function(e){console.warn('Findings merge sync:',e.message);});
         }
       }else{
-        var raw=localStorage.getItem(k);
-        if(raw!==null){
-          try{missing[k]=_stripPhotos(k,JSON.parse(raw));}catch(e){}
-        }
+        localStorage.removeItem(k);
       }
     });
-
-    if(Object.keys(missing).length){
-      _apiFetch('/api/sync/bulk',{method:'POST',body:JSON.stringify({items:missing,by:(APP.currentUser&&APP.currentUser.loginId)||'browser-seed'})}).catch(function(e){console.warn('Initial MongoDB seed:',e.message);});
-    }
 
     if(typeof repairCompletedAuditScores==='function')repairCompletedAuditScores();
     // Status update only on sync — email scheduler handles actual sending
@@ -2228,7 +2069,7 @@ function appDashboardUrl(){
 }
 function getRequiredCcEmails(){
   var saved=LS.get('ap_required_cc_emails',null);
-  return Array.isArray(saved)?saved:DEFAULT_REQUIRED_CC_EMAILS.slice();
+  return Array.isArray(saved)?saved:[];
 }
 function setRequiredCcEmails(list){
   LS.set('ap_required_cc_emails',list);
@@ -2288,7 +2129,7 @@ function isFindingPastDue(f){
   return !!(due&&due<todayLocalDate());
 }
 function escalationTierForDelay(days){
-  var matrix=APP.escalationMatrix||DEF_ESCALATION_MATRIX;
+  var matrix=APP.escalationMatrix||[];
   return matrix.find(function(x){return days>=x.min&&days<=x.max;})||null;
 }
 function emailLockKeyForFinding(f,tier,type){
@@ -4429,7 +4270,7 @@ function deleteRootCause(id){
   });
 }
 // Email automation module
-function emailTpl(type){return (APP.emailTemplates||[]).find(t=>t.type===type&&t.active!==false)||(APP.emailTemplates||[]).find(t=>t.type===type)||DEF_EMAIL_TEMPLATES.find(t=>t.type===type)||{};}
+function emailTpl(type){return (APP.emailTemplates||[]).find(t=>t.type===type&&t.active!==false)||(APP.emailTemplates||[]).find(t=>t.type===type)||{};}
 function renderEmailMaster(canEdit){
   const q=(APP.emailSearch||'').toLowerCase();
   const rows=(APP.emailMaster||[]).filter(r=>!q||[r.spocName,r.email,r.department,r.deptCode,r.reportingName,r.reportingEmail,r.hodEmail,r.managementEmail].join(' ').toLowerCase().includes(q));
@@ -4510,7 +4351,7 @@ function removeCcEmail(idx){
 }
 function resetCcEmails(){
   confirmAct('Reset CC list to defaults (ankit.chittora, process, jatin.chouhan)?',function(){
-    setRequiredCcEmails(DEFAULT_REQUIRED_CC_EMAILS.slice());
+    setRequiredCcEmails([]);
     renderMdBody();
     showToast('CC list reset to defaults');
   });
@@ -4549,8 +4390,8 @@ function recipientsForDept(deptCode,mode,delay){
   }
   if(mode==='escalation'){
     // Determine tier from escalation matrix
-    const matrix=APP.escalationMatrix||DEF_ESCALATION_MATRIX;
-    const m=matrix.find(x=>delay>=x.min&&delay<=x.max)||matrix[0];
+    const matrix=APP.escalationMatrix||[];
+    const m=matrix.find(x=>delay>=x.min&&delay<=x.max)||matrix[0]||{to:['spoc'],cc:[],frequencyDays:3,label:'Default'};
     to=[];
     cc=[];
     (m.to||[]).forEach(k=>{
@@ -4650,7 +4491,7 @@ function renderAdmBody(t='users'){
   <div><div class="lbl">Minor</div><input type="number" id="dd-minor" value="${APP.capaDueDays?.minor||30}" min="1" max="90" style="text-align:center;"></div>
   <div><div class="lbl">Observation</div><input type="number" id="dd-obs" value="${APP.capaDueDays?.obs||45}" min="1" max="90" style="text-align:center;"></div>
 </div>
-<button class="btn btn-brand btn-sm mb3" onclick="APP.capaDueDays={critical:+el('dd-critical').value||7,major:+el('dd-major').value||15,minor:+el('dd-minor').value||30,obs:+el('dd-obs').value||45};LS.set('ap_capa_due',APP.capaDueDays);showToast('✅ Due days saved')">Save Due Day Settings</button>
+<button class="btn btn-brand btn-sm mb3" onclick="APP.capaDueDays={critical:+el('dd-critical').value||(APP.capaDueDays&&APP.capaDueDays.critical)||0,major:+el('dd-major').value||(APP.capaDueDays&&APP.capaDueDays.major)||0,minor:+el('dd-minor').value||(APP.capaDueDays&&APP.capaDueDays.minor)||0,obs:+el('dd-obs').value||(APP.capaDueDays&&APP.capaDueDays.obs)||0};LS.set('ap_capa_due',APP.capaDueDays);showToast('✅ Due days saved')">Save Due Day Settings</button>
 <div class="ch"><span class="dot" style="background:var(--brand)"></span>System Settings</div>${[['Email Notifications (in-app alerts to all roles when findings/CAPAs change)',true],['Auto-escalation Rules',true],['Require Evidence for NCs',true],['Allow Auditors to Delete Findings',false],['SPOC Comment Required for Closure',true]].map(([l,v])=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--bg3);font-size:13px;">${l}<label class="tgsw"><input type="checkbox" ${v?'checked':''}><span class="tgtr"></span></label></div>`).join('')}<button class="btn btn-brand btn-sm mt3" onclick="saveSystemSettings()">Save Settings</button><div class="mt3" style="border-top:1px solid var(--border);padding-top:12px;"><div class="ch"><span class="dot" style="background:var(--red)"></span>Danger Zone</div><div class="flex g2u fw">
 <button class="btn btn-danger btn-sm" onclick="resetAll()">🔄 Reset All Data (Password Required)</button>
 <button class="btn btn-brand btn-sm" onclick="exportAll()">📦 Export Full Backup (.json)</button>
