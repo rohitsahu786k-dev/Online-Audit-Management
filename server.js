@@ -43,6 +43,8 @@ const SYNC_KEYS = [
   'ap_escalation_matrix'
 ];
 const PASSWORD_RESET_KEY = '_password_reset_otps';
+const EMAIL_SEND_LOCK_PREFIX = '_email_send_lock_';
+const EMAIL_LOCK_PENDING_MS = 10 * 60 * 1000;
 
 let mongoClient;
 let appData;
@@ -120,6 +122,26 @@ function parseRecipients(input) {
     return input.split(/[;,]/).map(v => v.trim()).filter(Boolean);
   }
   return [];
+}
+
+function emailSendLockKey(input) {
+  return EMAIL_SEND_LOCK_PREFIX + crypto.createHash('sha256').update(String(input || '')).digest('hex');
+}
+
+function normalizeEmailLockItems(input) {
+  return (Array.isArray(input) ? input : [])
+    .map(item => {
+      const key = String((item && item.key) || '').trim();
+      const frequencyDays = Math.max(1, Math.min(365, Number((item && item.frequencyDays) || 1)));
+      if (!key) return null;
+      return {
+        key,
+        frequencyDays,
+        meta: item && typeof item.meta === 'object' ? item.meta : {}
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 100);
 }
 
 function cleanEnvValue(value) {
@@ -471,6 +493,99 @@ app.get('/api/email/verify', wrapAsync(async (_req, res) => {
   const transport = getMailer();
   const verified = await transport.verify();
   res.json({ ok: true, smtp: Boolean(verified), user: SMTP_USER });
+}));
+
+app.post('/api/email/locks/claim', wrapAsync(async (req, res) => {
+  const locks = normalizeEmailLockItems(req.body && req.body.locks);
+  if (!locks.length) return res.status(400).json({ ok: false, error: 'At least one email lock is required' });
+
+  const collection = await getCollection();
+  const now = new Date();
+  const pendingUntil = new Date(now.getTime() + EMAIL_LOCK_PENDING_MS);
+  const claimedBy = String((req.body && req.body.by) || 'browser').slice(0, 80);
+  const results = [];
+
+  for (const item of locks) {
+    const key = emailSendLockKey(item.key);
+    const nextAllowedAt = new Date(now.getTime() + item.frequencyDays * 24 * 60 * 60 * 1000);
+    try {
+      const doc = await collection.findOneAndUpdate(
+        {
+          key,
+          $and: [
+            { $or: [{ nextAllowedAt: { $exists: false } }, { nextAllowedAt: { $lte: now } }] },
+            { $or: [{ pendingUntil: { $exists: false } }, { pendingUntil: { $lte: now } }] }
+          ]
+        },
+        {
+          $set: {
+            key,
+            lockKey: item.key,
+            frequencyDays: item.frequencyDays,
+            nextAllowedAt,
+            pendingUntil,
+            claimedAt: now,
+            claimedBy,
+            meta: item.meta
+          },
+          $setOnInsert: { createdAt: now }
+        },
+        { upsert: true, returnDocument: 'after' }
+      );
+      results.push({ key: item.key, granted: Boolean(doc) });
+    } catch (err) {
+      if (err && err.code === 11000) {
+        results.push({ key: item.key, granted: false });
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  res.json({ ok: true, locks: results });
+}));
+
+app.post('/api/email/locks/commit', wrapAsync(async (req, res) => {
+  const locks = normalizeEmailLockItems(req.body && req.body.locks);
+  if (!locks.length) return res.status(400).json({ ok: false, error: 'At least one email lock is required' });
+
+  const collection = await getCollection();
+  const now = new Date();
+  const success = Boolean(req.body && req.body.success);
+  const committedBy = String((req.body && req.body.by) || 'browser').slice(0, 80);
+  const pendingUntil = new Date(0);
+  const results = [];
+
+  for (const item of locks) {
+    const nextAllowedAt = new Date(now.getTime() + item.frequencyDays * 24 * 60 * 60 * 1000);
+    const update = success
+      ? {
+          $set: {
+            frequencyDays: item.frequencyDays,
+            lastSentAt: now,
+            nextAllowedAt,
+            pendingUntil,
+            committedAt: now,
+            committedBy,
+            meta: item.meta
+          }
+        }
+      : {
+          $set: {
+            frequencyDays: item.frequencyDays,
+            lastFailedAt: now,
+            nextAllowedAt: pendingUntil,
+            pendingUntil,
+            committedAt: now,
+            committedBy,
+            meta: item.meta
+          }
+        };
+    const result = await collection.updateOne({ key: emailSendLockKey(item.key) }, update);
+    results.push({ key: item.key, updated: result.modifiedCount > 0 });
+  }
+
+  res.json({ ok: true, locks: results });
 }));
 
 app.post('/api/email', wrapAsync(async (req, res) => {

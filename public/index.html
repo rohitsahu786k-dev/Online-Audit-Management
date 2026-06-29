@@ -876,11 +876,11 @@ const DEF_EMAIL_TEMPLATES=[
   {id:'tpl_escalation',type:'escalation',name:'Escalation Reminder',active:true,subject:'Escalation: Delayed NC Closure - {{department_name}}',body:'Dear {{spoc_name}},<br><br>The following NCs remain delayed and have reached escalation level {{escalation_level}}.<br><br>{{nc_table}}<br>Regards,<br>Audit Team',updatedAt:''}
 ];
 // Escalation Matrix:
-// Tier 1: 0–6 days overdue  → Delayed NC email to SPOC only (every 3 days)
+// Tier 1: 3–6 days overdue  → Delayed NC email to SPOC only (every 3 days)
 // Tier 2: 7–14 days overdue → Escalate to HOD (SPOC in CC), frequency every 2 days
 // Tier 3: 14–21 days overdue→ Escalate to MD/Management (HOD + SPOC in CC), frequency once a month (30 days)
 const DEF_ESCALATION_MATRIX=[
-  {min:1,max:6,label:'1-6 Days',to:['spoc'],cc:[],frequencyDays:3},
+  {min:3,max:6,label:'3-6 Days',to:['spoc'],cc:[],frequencyDays:3},
   {min:7,max:14,label:'7-14 Days (HOD)',to:['hod'],cc:['spoc'],frequencyDays:2},
   {min:15,max:21,label:'15-21 Days (MD)',to:['management'],cc:['hod','spoc'],frequencyDays:30},
   {min:22,max:9999,label:'22+ Days (MD)',to:['management'],cc:['hod','spoc'],frequencyDays:30}
@@ -960,6 +960,30 @@ function normalizeEmailTemplates(list){
   });
   return {value:rows,changed:changed};
 }
+function normalizeEscalationMatrixData(list){
+  var rows=Array.isArray(list)?list.slice():[];
+  var changed=false;
+  DEF_ESCALATION_MATRIX.forEach(function(def){
+    var idx=rows.findIndex(function(x){
+      if(!x)return false;
+      if(x.label===def.label)return true;
+      if(def.min===3&&def.max===6&&Number(x.max)===6&&Number(x.frequencyDays||3)===3)return true;
+      return Number(x.min)===def.min&&Number(x.max)===def.max;
+    });
+    var next=Object.assign({},def);
+    if(idx>=0){
+      if(JSON.stringify(rows[idx])!==JSON.stringify(next)){rows[idx]=next;changed=true;}
+    }else{
+      rows.push(next);changed=true;
+    }
+  });
+  rows=rows.filter(function(x,idx){
+    if(!x)return false;
+    if(Number(x.min)<3&&Number(x.max)<=6){changed=true;return false;}
+    return rows.findIndex(function(y){return y&&y.label===x.label;})===idx;
+  });
+  return {value:rows,changed:changed};
+}
 function buildDefaultEmailMaster(){
   return DEF_DEPTS.map(function(d){
     var spoc=DEF_USERS.find(function(u){return u.role==='spoc'&&u.dept===d.code;})||{};
@@ -995,7 +1019,7 @@ const APP={
   get emailLogs()   {return LS.get('ap_email_logs',[]);},          set emailLogs(v) {LS.set('ap_email_logs',v);},
   get rootCauses()  {var r=normalizeRootCausesData(LS.init('ap_root_causes',DEF_ROOT_CAUSES));if(r.changed)LS.set('ap_root_causes',r.value);return r.value;}, set rootCauses(v){LS.set('ap_root_causes',normalizeRootCausesData(v).value);},
   get mediaLibrary(){return LS.get('ap_media_library',[]);},        set mediaLibrary(v){LS.set('ap_media_library',v);},
-  get escalationMatrix(){return LS.init('ap_escalation_matrix',DEF_ESCALATION_MATRIX);}, set escalationMatrix(v){LS.set('ap_escalation_matrix',v);},
+  get escalationMatrix(){var r=normalizeEscalationMatrixData(LS.init('ap_escalation_matrix',DEF_ESCALATION_MATRIX));if(r.changed)LS.set('ap_escalation_matrix',r.value);return r.value;}, set escalationMatrix(v){LS.set('ap_escalation_matrix',normalizeEscalationMatrixData(v).value);},
   get session()     {return LS.get('ap_sess',null);},              set session(v)    {if(v)LS.set('ap_sess',v);else LS.del('ap_sess');},
   currentPage:'dashboard',
   currentSection:0,
@@ -2210,6 +2234,39 @@ function isFindingPastDue(f){
   var due=localDateOnly(f&&f.due);
   return !!(due&&due<todayLocalDate());
 }
+function escalationTierForDelay(days){
+  var matrix=APP.escalationMatrix||DEF_ESCALATION_MATRIX;
+  return matrix.find(function(x){return days>=x.min&&days<=x.max;})||null;
+}
+function emailLockKeyForFinding(f,tier,type){
+  return [type||'delayed',f&&f.dept||'',tier&&tier.label||'',f&&String(f.ref||f.id||'')].join('|');
+}
+function emailLockItemsForRows(rows,tier,type){
+  return (rows||[]).map(function(f){
+    return {
+      key:emailLockKeyForFinding(f,tier,type),
+      frequencyDays:tier&&tier.frequencyDays||3,
+      meta:{ref:f&&f.ref||'',dept:f&&f.dept||'',tier:tier&&tier.label||'',type:type||'delayed'}
+    };
+  });
+}
+function claimEmailLocks(rows,tier,type){
+  if(!_apiReady){showToast('Email lock service not ready');return Promise.resolve([]);}
+  var locks=emailLockItemsForRows(rows,tier,type);
+  if(!locks.length)return Promise.resolve([]);
+  return _apiFetch('/api/email/locks/claim',{method:'POST',body:JSON.stringify({locks:locks,by:(APP.currentUser&&APP.currentUser.loginId)||'email-scheduler'})})
+    .then(function(data){
+      var granted={};
+      (data.locks||[]).forEach(function(lock){if(lock&&lock.granted)granted[lock.key]=true;});
+      return (rows||[]).filter(function(f){return granted[emailLockKeyForFinding(f,tier,type)];});
+    })
+    .catch(function(e){console.warn('Email lock claim:',e.message);return [];});
+}
+function commitEmailLocks(rows,tier,type,success){
+  if(!_apiReady||!rows||!rows.length)return Promise.resolve();
+  return _apiFetch('/api/email/locks/commit',{method:'POST',body:JSON.stringify({locks:emailLockItemsForRows(rows,tier,type),success:!!success,by:(APP.currentUser&&APP.currentUser.loginId)||'email-scheduler'})})
+    .catch(function(e){console.warn('Email lock commit:',e.message);});
+}
 function processOverdueFindings(opts){
   opts=opts||{};
   if(typeof APP==='undefined'||!APP.currentUser)return {updated:0,emailQueued:0};
@@ -2237,13 +2294,15 @@ function processOverdueFindings(opts){
     }
     // ── Per-tier frequency enforcement ──
     // Each tier tracks its own last-sent timestamp independently:
-    //   Tier 1 (0-6d)  → every 3 days
+    //   Tier 1 (3-6d)  → every 3 days
     //   Tier 2 (7-14d) → every 2 days  (escalation to HOD)
     //   Tier 3 (15+d)  → every 30 days (escalation to MD)
     if(opts.sendEmail&&typeof sendTemplateEmail==='function'){
       var fDays=delayDays(item);
-      var fMatrix=APP.escalationMatrix||DEF_ESCALATION_MATRIX;
-      var fTier=fMatrix.find(function(x){return fDays>=x.min&&fDays<=x.max;})||fMatrix[0];
+      var fTier=escalationTierForDelay(fDays);
+      if(!fTier)return item;
+      if(opts.mode==='delayed'&&fTier.min>=7)return item;
+      if(opts.mode==='escalation'&&fTier.min<7)return item;
       var fFreqMs=(fTier.frequencyDays||3)*24*60*60*1000;
       var fTierLabel=fTier.label;
       // autoEmailTierLastSentAt is a map: { tierLabel: isoTimestamp }
@@ -2251,8 +2310,6 @@ function processOverdueFindings(opts){
       var fLastTierSent=fTierMap[fTierLabel]?new Date(fTierMap[fTierLabel]).getTime():0;
       if(!fLastTierSent||Date.now()-fLastTierSent>=fFreqMs){
         item.autoDelayedEmailAt=nowIso;
-        item.autoDelayedEmailLastSentAt=nowIso;
-        item.autoEmailTierLastSentAt=Object.assign({},fTierMap,{[fTierLabel]:nowIso});
         item.autoDelayedEmailStatus='queued';
         emailRows.push(item);
         changed=true;
@@ -2274,8 +2331,8 @@ function processOverdueFindings(opts){
       var tierGroups={};
       deptFindings.forEach(function(f){
         var days=delayDays(f);
-        var matrix=APP.escalationMatrix||DEF_ESCALATION_MATRIX;
-        var tier=matrix.find(function(x){return days>=x.min&&days<=x.max;})||matrix[0];
+        var tier=escalationTierForDelay(days);
+        if(!tier)return;
         var tierKey=tier.label;
         if(!tierGroups[tierKey])tierGroups[tierKey]={tier:tier,rows:[]};
         tierGroups[tierKey].rows.push(f);
@@ -2283,8 +2340,16 @@ function processOverdueFindings(opts){
       Object.keys(tierGroups).forEach(function(tierKey){
         var tg=tierGroups[tierKey];
         var emailType=tg.tier.min>=7?'escalation':'delayed';
-        sendTemplateEmail(emailType,dept,tg.rows,{escalation_level:tg.tier.label,_tier:tg.tier}).then(function(ok){
-          var refs=new Set(tg.rows.map(function(f){return String(f.ref||f.id||'');}));
+        claimEmailLocks(tg.rows,tg.tier,emailType).then(function(claimedRows){
+          if(!claimedRows.length)return null;
+          return sendTemplateEmail(emailType,dept,claimedRows,{escalation_level:tg.tier.label,_tier:tg.tier})
+            .then(function(ok){
+              return commitEmailLocks(claimedRows,tg.tier,emailType,ok).then(function(){return{ok:ok,rows:claimedRows};});
+            });
+        }).then(function(result){
+          if(!result)return;
+          var ok=result.ok;
+          var refs=new Set(result.rows.map(function(f){return String(f.ref||f.id||'');}));
           var rows=APP.findings||[],dirty=false,doneAt=new Date().toISOString();
           rows=rows.map(function(f){
             if(!f||!refs.has(String(f.ref||f.id||'')))return f;
@@ -3805,7 +3870,7 @@ function renderCapa(){
       <div class="card">
         <div class="ch"><span class="dot" style="background:var(--red)"></span>Escalation Rules</div>
         <div class="txs" style="line-height:2.2;">${[
-          ['Overdue (any)','Delayed NC email → SPOC · Every 3rd day'],
+          ['Overdue 3–6d','Delayed NC email → SPOC · Every 3rd day'],
           ['Overdue 7–14d','Escalation → HOD (SPOC in CC) · Every 2 days'],
           ['Overdue 15–21d','Escalation → MD Sir (HOD + SPOC CC) · Monthly'],
           ['Overdue 22d+','Escalation → MD Sir (HOD + SPOC CC) · Monthly']
@@ -4424,7 +4489,7 @@ function recipientsForDept(deptCode,mode,delay){
   let to=spocEmails(deptCode),cc=[];
   if(mode==='audit'||mode==='upcoming'){cc=deptManagerEmails(deptCode).concat(deptHodEmails(deptCode),managementEmails().slice(0,1));}
   if(mode==='delayed'){
-    // Tier 1 (< 7 days): email to SPOC only (no CC escalation)
+    // Tier 1 (3-6 days): email to SPOC only (no CC escalation)
     to=spocEmails(deptCode);
     cc=[];
   }
@@ -4480,6 +4545,12 @@ function sendTemplateEmail(type,deptCode,rows,extra){
   return sendLoggedEmail(type,rec.to,rec.cc,subject,html.replace(/<[^>]+>/g,' '),html,extra&&extra.attachment||'');
 }
 function runEmailScheduler(mode){
+  if(mode==='delayed'||mode==='escalation'){
+    const result=processOverdueFindings({sendEmail:true,source:'manual-'+mode,mode:mode});
+    renderMdBody();
+    showToast('Guarded '+mode+' run queued '+(result.emailQueued||0)+' eligible NC(s)');
+    return;
+  }
   const today=new Date();const ncSev={critical:1,major:1,minor:1};let items=APP.findings.filter(f=>f.status!=='closed'&&ncSev[String(f.sev||'').toLowerCase()]);
   if(mode==='upcoming')items=items.filter(f=>{const d=new Date(f.due);const days=Math.ceil((d-today)/86400000);return days>=0&&days<=5;});
   if(mode==='delayed'||mode==='escalation')items=items.filter(f=>delayDays(f)>0);
