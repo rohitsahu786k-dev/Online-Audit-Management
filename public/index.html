@@ -689,6 +689,46 @@ function _mergeEmailLogs(local,remote){
     .slice(0,500);
 }
 
+function _findingSyncKey(f){
+  return String((f&&f.id)||(f&&f.ref)||'').trim();
+}
+function _findingSyncTime(f){
+  var raw=(f&&f.updatedAt)||(f&&f.findingUpdatedAt)||'';
+  var t=raw?Date.parse(raw):0;
+  return isNaN(t)?0:t;
+}
+function _hasReviewDecision(f){
+  var d=String((f&&f.decision)||'').toLowerCase();
+  return d==='accept'||d==='reject';
+}
+function _isPendingReviewFinding(f){
+  return String((f&&f.status)||'').toLowerCase()==='pending-closure'||String((f&&f.capaStatus)||'').toLowerCase()==='submitted';
+}
+function _chooseFindingForSync(local,remote){
+  if(!local)return remote;
+  if(!remote)return local;
+  var lt=_findingSyncTime(local),rt=_findingSyncTime(remote);
+  if(lt||rt)return rt>=lt?remote:local;
+  var lr=_hasReviewDecision(local)||String(local.status||'').toLowerCase()==='closed';
+  var rr=_hasReviewDecision(remote)||String(remote.status||'').toLowerCase()==='closed';
+  if(lr&&_isPendingReviewFinding(remote)&&!rr)return local;
+  if(rr&&_isPendingReviewFinding(local)&&!lr)return remote;
+  return remote;
+}
+function _mergeFindingsForSync(local,remote){
+  if(!Array.isArray(remote))return remote;
+  if(!Array.isArray(local)||!local.length)return remote;
+  var byKey={},seen={},out=[];
+  local.forEach(function(f){var k=_findingSyncKey(f);if(k)byKey[k]=f;});
+  remote.forEach(function(f){
+    var k=_findingSyncKey(f);
+    if(k){seen[k]=1;out.push(_chooseFindingForSync(byKey[k],f));}
+    else out.push(f);
+  });
+  local.forEach(function(f){var k=_findingSyncKey(f);if(k&&!seen[k])out.push(f);});
+  return out;
+}
+
 function _refreshAfterSync(k){
   if(typeof APP==='undefined'||typeof renderPage!=='function')return;
   var page=APP.currentPage;
@@ -1083,6 +1123,12 @@ function initApiSync(){
       if(cloud[k]&&Object.prototype.hasOwnProperty.call(cloud[k],'value')){
         var remote=_sanitizeSyncData(k,cloud[k].value);
         var local=LS.get(k,null);
+        var shouldPushMerged=false;
+        if(k==='ap_finds'){
+          var mergedFindings=_mergeFindingsForSync(local,remote);
+          shouldPushMerged=JSON.stringify(mergedFindings)!==JSON.stringify(remote);
+          remote=mergedFindings;
+        }
         if(k==='ap_email_logs'){
           var mergedLogs=_mergeEmailLogs(local,remote);
           if(JSON.stringify(mergedLogs)!==JSON.stringify(local||[])){
@@ -1094,6 +1140,9 @@ function initApiSync(){
         if(remote!==null&&remote!==undefined&&(!local||JSON.stringify(remote).length>=JSON.stringify(local).length)){
           localStorage.setItem(k,JSON.stringify(remote));
           updated=true;
+        }
+        if(shouldPushMerged){
+          _apiFetch('/api/sync/ap_finds',{method:'PUT',body:JSON.stringify({value:remote,by:(APP.currentUser&&APP.currentUser.loginId)||'browser-merge'})}).catch(function(e){console.warn('Findings merge sync:',e.message);});
         }
       }else{
         var raw=localStorage.getItem(k);
@@ -1136,6 +1185,15 @@ function pollApiSync(){
       var local=LS.get(k,null);
       var remoteText=JSON.stringify(remote);
       var localText=JSON.stringify(local);
+      if(k==='ap_finds'){
+        var mergedFindings=_mergeFindingsForSync(local,remote);
+        var mergedText=JSON.stringify(mergedFindings);
+        if(mergedText!==remoteText){
+          remote=mergedFindings;
+          remoteText=mergedText;
+          _apiFetch('/api/sync/ap_finds',{method:'PUT',body:JSON.stringify({value:remote,by:(APP.currentUser&&APP.currentUser.loginId)||'browser-merge'})}).catch(function(e){console.warn('Findings merge sync:',e.message);});
+        }
+      }
       if(k==='ap_email_logs'){
         var mergedLogs=_mergeEmailLogs(local,remote);
         if(JSON.stringify(mergedLogs)!==localText){
@@ -1405,6 +1463,12 @@ function normalizeFindingsData(data){
     if(!String(f.ref||'').trim()){updates.ref=updates.id||id;changed=true;}
     if(!String(f.status||'').trim()){updates.status='open';changed=true;}
     if(!String(f.capaStatus||'').trim()){updates.capaStatus=f.status||'open';changed=true;}
+    if(String(f.decision||'').toLowerCase()==='reject'&&String(f.status||'').toLowerCase()==='pending-closure'){
+      updates.status='open';updates.capaStatus='open';changed=true;
+    }
+    if(String(f.decision||'').toLowerCase()==='accept'&&String(f.status||'').toLowerCase()!=='closed'){
+      updates.status='closed';updates.capaStatus='closed';changed=true;
+    }
     if(f.clause!==undefined&&typeof f.clause!=='string'){updates.clause=String(f.clause||'-');changed=true;}
     if(f.closureEvidence==null){updates.closureEvidence='';changed=true;}
     if(!Array.isArray(f.closureFiles)){updates.closureFiles=[];changed=true;}
@@ -1433,6 +1497,10 @@ function findCapa(key,list){
   return F.find(function(x){return String(x.ref||'')===text;})||
     F.find(function(x){return String(x.id||'')===text;})||
     F.find(function(x){return capaKey(x)===String(key||'');})||null;
+}
+function touchFinding(f){
+  if(f&&typeof f==='object')f.updatedAt=new Date().toISOString();
+  return f;
 }
 function openCapa(key){
   APP.activeCapaId=key;
@@ -3934,7 +4002,7 @@ function selectCapa(key){
 }
 function updateCapaStatus(key,status){
   const F=APP.findings;const f=findCapa(key,F);if(!f)return;
-  f.status=status;f.capaStatus=status==='pending-closure'?'submitted':status;f.activityLog=f.activityLog||[];
+  f.status=status;f.capaStatus=status==='pending-closure'?'submitted':status;f.activityLog=f.activityLog||[];touchFinding(f);
   if(status==='closed'){
     if(!f.auditClosureDate)f.auditClosureDate=todayInputValue();
     if(!f.closedAt)f.closedAt=dateInputToLocalStart(f.auditClosureDate);
@@ -3948,7 +4016,7 @@ function updateCapaStatus(key,status){
 }
 function updateCapaDue(key,due){
   const F=APP.findings;const f=findCapa(key,F);if(!f)return;
-  f.due=due;f.activityLog=f.activityLog||[];
+  f.due=due;f.activityLog=f.activityLog||[];touchFinding(f);
   f.activityLog.push({user:APP.currentUser?.name||'System',action:'Due date -> '+(due||'Not set'),ts:new Date().toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'})});
   APP.findings=F;APP.activeCapaId=capaKey(f);selectCapa(APP.activeCapaId);showToast('Due date updated');
 }
@@ -3964,7 +4032,7 @@ function submitClosure(){
   f.status='pending-closure';f.capaStatus='submitted';f.closureEvidence=ev;
   f.closureFiles=APP.closureFiles.slice();f.closureSubmittedBy=APP.currentUser?.name;
   f.closureDate=new Date().toLocaleDateString('en-IN');
-  f.activityLog=f.activityLog||[];f.activityLog.push({user:APP.currentUser?.name,action:'Closure submitted',ts:new Date().toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'})});
+  f.activityLog=f.activityLog||[];touchFinding(f);f.activityLog.push({user:APP.currentUser?.name,action:'Closure submitted',ts:new Date().toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'})});
   APP.findings=F;APP.activeCapaId=capaKey(f);closeM('m-closure');addNotif('closure','Closure Submitted',`${f.ref}: ${APP.currentUser?.name} submitted closure`,'capa',['admin','auditor']);
   renderPage('capa');buildNav();showToast('✅ Closure submitted. Awaiting auditor.');
 }
@@ -3986,7 +4054,7 @@ function reviewDec(dec){
   f.decision=dec;f.decisionComments=cmt;f.decisionDate=new Date().toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'});
   f.status=dec==='accept'?'closed':'open';f.capaStatus=dec==='accept'?'closed':'open';
   f.auditClosureDate=dec==='accept'?auditClosureDate:null;
-  f.closedAt=dec==='accept'?dateInputToLocalStart(auditClosureDate):null;
+  f.closedAt=dec==='accept'?dateInputToLocalStart(auditClosureDate):null;touchFinding(f);
   f.activityLog=f.activityLog||[];f.activityLog.push({user:APP.currentUser?.name,action:`Closure ${dec==='accept'?'ACCEPTED':'REJECTED'}${dec==='accept'?' effective '+auditClosureDateText(auditClosureDate):''}${cmt?' — '+cmt:''}`,ts:f.decisionDate});
   APP.findings=F;APP.activeCapaId=capaKey(f);closeM('m-review');addNotif('closure',dec==='accept'?'✅ Closed':'❌ Rejected',`${f.ref}: ${dec==='accept'?'Closure accepted':'Reopened - '+cmt}`,'capa',['admin','auditor','spoc']);
   renderPage('capa');buildNav();showToast(dec==='accept'?'✅ Closed & verified!':'❌ Rejected. Reopened.');

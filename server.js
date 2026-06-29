@@ -287,6 +287,73 @@ function mergeEmailLogs(existing, incoming, clearedAt) {
     .slice(0, 500);
 }
 
+function findingKey(finding) {
+  if (!finding || typeof finding !== 'object') return '';
+  return String(finding.id || finding.ref || '').trim();
+}
+
+function findingUpdatedTime(finding) {
+  if (!finding || typeof finding !== 'object') return 0;
+  const raw = finding.updatedAt || finding.findingUpdatedAt || '';
+  const time = raw ? Date.parse(raw) : 0;
+  return Number.isFinite(time) ? time : 0;
+}
+
+function hasReviewDecision(finding) {
+  const decision = String((finding && finding.decision) || '').toLowerCase();
+  return decision === 'accept' || decision === 'reject';
+}
+
+function isPendingReviewFinding(finding) {
+  const status = String((finding && finding.status) || '').toLowerCase();
+  const capaStatus = String((finding && finding.capaStatus) || '').toLowerCase();
+  return status === 'pending-closure' || capaStatus === 'submitted';
+}
+
+function chooseFindingForSync(current, incoming) {
+  if (!current) return incoming;
+  if (!incoming) return current;
+
+  const currentTime = findingUpdatedTime(current);
+  const incomingTime = findingUpdatedTime(incoming);
+  if (currentTime || incomingTime) {
+    return incomingTime >= currentTime ? incoming : current;
+  }
+
+  const currentReviewed = hasReviewDecision(current) || String(current.status || '').toLowerCase() === 'closed';
+  const incomingReviewed = hasReviewDecision(incoming) || String(incoming.status || '').toLowerCase() === 'closed';
+  if (currentReviewed && isPendingReviewFinding(incoming) && !incomingReviewed) return current;
+  if (incomingReviewed && isPendingReviewFinding(current) && !currentReviewed) return incoming;
+
+  return incoming;
+}
+
+function mergeFindingsForSync(currentValue, incomingValue) {
+  if (!Array.isArray(incomingValue)) return incomingValue;
+  if (!Array.isArray(currentValue) || !currentValue.length) return incomingValue;
+
+  const currentByKey = new Map();
+  currentValue.forEach(finding => {
+    const key = findingKey(finding);
+    if (key) currentByKey.set(key, finding);
+  });
+
+  const seen = new Set();
+  const merged = incomingValue.map(finding => {
+    const key = findingKey(finding);
+    if (!key) return finding;
+    seen.add(key);
+    return chooseFindingForSync(currentByKey.get(key), finding);
+  });
+
+  currentValue.forEach(finding => {
+    const key = findingKey(finding);
+    if (key && !seen.has(key)) merged.push(finding);
+  });
+
+  return merged;
+}
+
 function cleanIdentity(input) {
   return String(input || '').trim().toLowerCase();
 }
@@ -405,7 +472,7 @@ app.put('/api/sync/:key', wrapAsync(async (req, res) => {
 
   const collection = await getCollection();
   const now = new Date();
-  const incomingValue = req.body && Object.prototype.hasOwnProperty.call(req.body, 'value') ? req.body.value : null;
+  let incomingValue = req.body && Object.prototype.hasOwnProperty.call(req.body, 'value') ? req.body.value : null;
 
   if (key === 'ap_email_logs') {
     const current = await collection.findOne({ key });
@@ -432,6 +499,11 @@ app.put('/api/sync/:key', wrapAsync(async (req, res) => {
     );
 
     return res.json({ ok: true, key, updatedAt: now, count: value.length });
+  }
+
+  if (key === 'ap_finds') {
+    const current = await collection.findOne({ key });
+    incomingValue = mergeFindingsForSync(current && current.value, incomingValue);
   }
 
   await collection.updateOne(
