@@ -1118,8 +1118,6 @@ function initApiSync(){
 
     _syncStatus='synced';_updateSyncUI();
     setInterval(pollApiSync,15000);
-    // Start the dedicated email scheduler AFTER first successful sync
-    if(typeof startEmailScheduler==='function')startEmailScheduler();
   }).catch(function(err){
     console.warn('Initial sync failed:',err);
     _syncStatus='offline';_updateSyncUI();
@@ -1166,20 +1164,7 @@ var _emailSchedulerStarted=false;
 function startEmailScheduler(){
   if(_emailSchedulerStarted)return;
   _emailSchedulerStarted=true;
-  // First run: 60s after login (data has settled from initial sync)
-  setTimeout(function(){
-    if(typeof processOverdueFindings==='function'&&APP.currentUser){
-      console.log('[EmailScheduler] Running initial check...');
-      processOverdueFindings({sendEmail:true,source:'scheduler'});
-    }
-    // Then repeat every 4 hours
-    setInterval(function(){
-      if(typeof processOverdueFindings==='function'&&APP.currentUser){
-        console.log('[EmailScheduler] Running scheduled check...');
-        processOverdueFindings({sendEmail:true,source:'scheduler'});
-      }
-    },4*60*60*1000); // 4 hours
-  },60*1000); // 60 seconds after login
+  console.log('[EmailScheduler] Browser auto-send disabled; use guarded manual automation runs.');
 }
 
 // Start sync after DOM ready
@@ -2270,6 +2255,7 @@ function commitEmailLocks(rows,tier,type,success){
 function processOverdueFindings(opts){
   opts=opts||{};
   if(typeof APP==='undefined'||!APP.currentUser)return {updated:0,emailQueued:0};
+  var allowEmailSend=!!(opts.sendEmail&&/^manual-/.test(String(opts.source||'')));
   var list=APP.findings||[];
   var nowIso=new Date().toISOString();
   var stamp=new Date().toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'});
@@ -2297,7 +2283,7 @@ function processOverdueFindings(opts){
     //   Tier 1 (3-6d)  → every 3 days
     //   Tier 2 (7-14d) → every 2 days  (escalation to HOD)
     //   Tier 3 (15+d)  → every 30 days (escalation to MD)
-    if(opts.sendEmail&&typeof sendTemplateEmail==='function'){
+    if(allowEmailSend&&typeof sendTemplateEmail==='function'){
       var fDays=delayDays(item);
       var fTier=escalationTierForDelay(fDays);
       if(!fTier)return item;
@@ -2321,7 +2307,7 @@ function processOverdueFindings(opts){
   if(updated){
     addNotif('capa','Delayed NC Auto Update',updated+' finding(s) crossed due date and were marked Delayed.','findings',['admin','auditor','spoc','manager']);
   }
-  if(emailRows.length&&opts.sendEmail&&typeof sendTemplateEmail==='function'){
+  if(emailRows.length&&allowEmailSend&&typeof sendTemplateEmail==='function'){
     // Group findings by dept, further split by escalation tier
     var groups={};
     emailRows.forEach(function(f){if(f&&f.dept)(groups[f.dept]=groups[f.dept]||[]).push(f);});
