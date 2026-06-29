@@ -2206,15 +2206,24 @@ function processOverdueFindings(opts){
       item.capaStatus='delayed';
       changed=true;
     }
-    // ── Delayed NC email: send every 3rd day after the due date is missed ──
+    // ── Per-tier frequency enforcement ──
+    // Each tier tracks its own last-sent timestamp independently:
+    //   Tier 1 (0-6d)  → every 3 days
+    //   Tier 2 (7-14d) → every 2 days  (escalation to HOD)
+    //   Tier 3 (15+d)  → every 30 days (escalation to MD)
     if(opts.sendEmail&&typeof sendTemplateEmail==='function'){
-      var lastSent=item.autoDelayedEmailLastSentAt?new Date(item.autoDelayedEmailLastSentAt).getTime():0;
-      var msSinceSent=Date.now()-lastSent;
-      var threeDaysMs=3*24*60*60*1000;
-      // Only send if: never sent before OR at least 3 days have passed since last send
-      if(!lastSent||msSinceSent>=threeDaysMs){
+      var fDays=delayDays(item);
+      var fMatrix=APP.escalationMatrix||DEF_ESCALATION_MATRIX;
+      var fTier=fMatrix.find(function(x){return fDays>=x.min&&fDays<=x.max;})||fMatrix[0];
+      var fFreqMs=(fTier.frequencyDays||3)*24*60*60*1000;
+      var fTierLabel=fTier.label;
+      // autoEmailTierLastSentAt is a map: { tierLabel: isoTimestamp }
+      var fTierMap=(item.autoEmailTierLastSentAt&&typeof item.autoEmailTierLastSentAt==='object')?item.autoEmailTierLastSentAt:{};
+      var fLastTierSent=fTierMap[fTierLabel]?new Date(fTierMap[fTierLabel]).getTime():0;
+      if(!fLastTierSent||Date.now()-fLastTierSent>=fFreqMs){
         item.autoDelayedEmailAt=nowIso;
         item.autoDelayedEmailLastSentAt=nowIso;
+        item.autoEmailTierLastSentAt=Object.assign({},fTierMap,{[fTierLabel]:nowIso});
         item.autoDelayedEmailStatus='queued';
         emailRows.push(item);
         changed=true;
@@ -2251,7 +2260,16 @@ function processOverdueFindings(opts){
           rows=rows.map(function(f){
             if(!f||!refs.has(String(f.ref||f.id||'')))return f;
             dirty=true;
-            return Object.assign({},f,{autoDelayedEmailStatus:ok?'sent':'failed',autoDelayedEmailResultAt:doneAt,autoDelayedEmailLastSentAt:ok?doneAt:f.autoDelayedEmailLastSentAt});
+            // Update per-tier last-sent timestamp on success
+            var updatedTierMap=ok
+              ?Object.assign({},f.autoEmailTierLastSentAt||{},{[tg.tier.label]:doneAt})
+              :f.autoEmailTierLastSentAt||{};
+            return Object.assign({},f,{
+              autoDelayedEmailStatus:ok?'sent':'failed',
+              autoDelayedEmailResultAt:doneAt,
+              autoDelayedEmailLastSentAt:ok?doneAt:f.autoDelayedEmailLastSentAt,
+              autoEmailTierLastSentAt:updatedTierMap
+            });
           });
           if(dirty)APP.findings=rows;
         });
