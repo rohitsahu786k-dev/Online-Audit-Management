@@ -1713,6 +1713,7 @@ function clearDateFilter(){
 
 function sanitize(s){if(!s)return '';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;');}
 function jsArg(v){return JSON.stringify(String(v==null?'':v));}
+function attrJsArg(v){return sanitize(jsArg(v));}
 
 function _uniqueFindingId(f,idx,seen){
   var base=String((f&&f.ref)||(f&&f.id)||('finding_'+idx)).trim().replace(/[^A-Za-z0-9]+/g,'_').replace(/^_+|_+$/g,'')||('finding_'+idx);
@@ -1822,7 +1823,7 @@ function capaStatusOptionsForRole(f,role){
 }
 function renderCapaStatusSelect(key,f,role){
   var ws=findingWorkflowStatus(f);
-  return `<select ${canEditCapaStatus(role)?'':'disabled'} onchange="updateCapaStatus(${jsArg(key)},this.value,this)">`+capaStatusOptionsForRole(f,role).map(function(opt){
+  return `<select ${canEditCapaStatus(role)?'':'disabled'} onchange="updateCapaStatus(${attrJsArg(key)},this.value,this)">`+capaStatusOptionsForRole(f,role).map(function(opt){
     return '<option value="'+opt.value+'" '+(ws===opt.value?'selected':'')+' '+(opt.disabled?'disabled':'')+'>'+opt.label+'</option>';
   }).join('')+'</select>';
 }
@@ -3082,7 +3083,7 @@ function renderDashboard(){
       <div class="card">
         <div class="ch"><span class="dot" style="background:var(--red)"></span>Critical Alerts</div>
         ${F.filter(f=>f.status!=='closed').slice(0,3).map(f=>`
-          <div class="fcard ${f.sev}" onclick="openCapa(${jsArg(capaKey(f))})">
+          <div class="fcard ${f.sev}" onclick="openCapa(${attrJsArg(capaKey(f))})">
             <div class="fb"><span class="f7 tsm">${f.ref}</span>${badge(SEV_BADGE[f.sev],SEV_LABEL[f.sev])}</div>
             <div class="txs td mt1">${f.deptName} · ${f.desc}</div>
             <div class="txs mt1" style="color:var(--${f.status==='delayed'?'red':'amber'})">${f.clause} · ${f.status==='delayed'?'⏰ Overdue':f.due}</div>
@@ -4291,7 +4292,7 @@ function renderFindingsTable(){
     <td>${badge('b-blue',f.clause)}</td>
     <td style="color:${f.status==='delayed'?'var(--red)':'inherit'};font-weight:${f.status==='delayed'?800:400};">${f.due}</td>
     <td>${badge(STAT_BADGE[f.status]||'b-gray',STAT_LABEL[f.status]||f.status)}${f.type==='repeat'?' '+badge('b-purple','Repeat'):''}</td>
-    ${role!=='viewer'?`<td><button class="btn btn-ghost btn-sm" onclick="openCapa(${jsArg(capaKey(f))})">CAPA →</button></td>`:'<td>—</td>'}
+    ${role!=='viewer'?`<td><button class="btn btn-ghost btn-sm" onclick="openCapa(${attrJsArg(capaKey(f))})">CAPA →</button></td>`:'<td>—</td>'}
   </tr>`).join('')||'<tr><td colspan="8" style="text-align:center;padding:18px;color:var(--text3);">No findings match filters</td></tr>';
   if(cnt)cnt.textContent=data.length+' record(s)';
   // Restore filter values
@@ -4341,7 +4342,7 @@ function renderCapa(){
           <select id="capa-filter" onchange="APP.capaStatusFilter=this.value;filterCapaList()"><option value="" ${!APP.capaStatusFilter?'selected':''}>All status</option><option value="open" ${APP.capaStatusFilter==='open'?'selected':''}>Open</option><option value="in-progress" ${APP.capaStatusFilter==='in-progress'?'selected':''}>In Progress</option><option value="delayed" ${APP.capaStatusFilter==='delayed'?'selected':''}>Delayed</option><option value="pending-closure" ${APP.capaStatusFilter==='pending-closure'?'selected':''}>Submit For Review</option><option value="closed" ${APP.capaStatusFilter==='closed'?'selected':''}>Closed</option></select>
         </div>
         <div class="capa-list" id="capa-list">
-        ${scoped.map(f=>{var ws=findingWorkflowStatus(f),ck=capaKey(f);return`<div class="fcard ${sanitize(f.sev||'')} capa-item ${ck===APP.activeCapaId?'active':''}" data-key="${sanitize(ck)}" data-status="${sanitize(ws||'')}" data-dept="${sanitize(f.dept||'')}" data-search="${sanitize([f.ref,f.deptName,f.desc,f.clause].join(' ')).toLowerCase()}" style="cursor:pointer;" onclick="selectCapa(${jsArg(ck)})">
+        ${scoped.map(f=>{var ws=findingWorkflowStatus(f),ck=capaKey(f);return`<div class="fcard ${sanitize(f.sev||'')} capa-item ${ck===APP.activeCapaId?'active':''}" data-key="${sanitize(ck)}" data-status="${sanitize(ws||'')}" data-dept="${sanitize(f.dept||'')}" data-search="${sanitize([f.ref,f.deptName,f.desc,f.clause].join(' ')).toLowerCase()}" style="cursor:pointer;" onclick="selectCapa(${attrJsArg(ck)})">
           <div class="fb"><span class="capa-ref">${sanitize(f.ref)}</span>${badge(STAT_BADGE[ws]||'b-gray',STAT_LABEL[ws]||ws)}</div>
           <div class="txs td">${sanitize(f.deptName)} · ${sanitize((f.desc||'').substring(0,45))}</div>
         </div>`;}).join('')||'<div class="txs td">No CAPAs found</div>'}
@@ -4390,7 +4391,7 @@ function renderCapaDetail(f){
   </div>
   <div class="grid g2 mb2" style="gap:9px;">
     <div><label class="lbl">Status</label>${renderCapaStatusSelect(key,f,role)}</div>
-    <div><label class="lbl">Due Date</label><input type="date" value="${sanitize(f.due||'')}" ${canEditDue?'':'disabled'} onchange="updateCapaDue(${jsArg(key)},this.value)"></div>
+    <div><label class="lbl">Due Date</label><input type="date" value="${sanitize(f.due||'')}" ${canEditDue?'':'disabled'} onchange="updateCapaDue(${attrJsArg(key)},this.value)"></div>
   </div>
   ${f.closureEvidence?`<div style="background:var(--green-bg);border:1px solid #86efac;border-radius:7px;padding:9px;margin-bottom:11px;">
     <div class="txs f7 mb1">📋 Closure Evidence Submitted For Review</div><div class="txs tm">${sanitize(f.closureEvidence)}</div>
@@ -4405,11 +4406,11 @@ function renderCapaDetail(f){
   <div class="ch mt2"><span class="dot" style="background:var(--teal)"></span>Activity Log</div>
   ${renderCapaActivityLog(f)}
   <div class="flex g2u fw mt3">
-    ${canClose&&ws!=='closed'&&ws!=='pending-closure'?`<button class="btn btn-success btn-sm" onclick="openClosureModal(${jsArg(key)})">Submit For Review</button>`:``}
-    ${canReview&&ws==='pending-closure'?`<button class="btn btn-primary btn-sm" onclick="openReviewModal(${jsArg(key)})">Review Closure</button>`:``}
-    ${role==='admin'&&ws!=='closed'&&ws!=='pending-closure'?`<button class="btn btn-amber btn-sm" onclick="updateCapaStatus(${jsArg(key)},'closed')">Force Close</button>`:``}
+    ${canClose&&ws!=='closed'&&ws!=='pending-closure'?`<button class="btn btn-success btn-sm" onclick="openClosureModal(${attrJsArg(key)})">Submit For Review</button>`:``}
+    ${canReview&&ws==='pending-closure'?`<button class="btn btn-primary btn-sm" onclick="openReviewModal(${attrJsArg(key)})">Review Closure</button>`:``}
+    ${role==='admin'&&ws!=='closed'&&ws!=='pending-closure'?`<button class="btn btn-amber btn-sm" onclick="updateCapaStatus(${attrJsArg(key)},'closed')">Force Close</button>`:``}
     ${ws==='closed'?badge('b-green','✅ Verified & Closed'):''}
-    <button class="btn btn-ghost btn-sm" onclick="sendCapaReminder(${jsArg(key)})">📧 Remind</button>
+    <button class="btn btn-ghost btn-sm" onclick="sendCapaReminder(${attrJsArg(key)})">📧 Remind</button>
   </div>`;
 }
 // selectCapa defined below
@@ -5264,7 +5265,7 @@ function renderMytasks(){
     <div class="stat"><div class="sl">Overdue</div><div class="sv" style="color:var(--red)">${overdue}</div><div class="sd dd">Immediate action</div></div>
     <div class="stat"><div class="sl">Due in 3 Days</div><div class="sv" style="color:var(--amber)">${ds}</div></div>
   </div>
-  ${tasks.length?tasks.map(t=>`<div class="tcard ${t.status}" onclick="${t.link==='capa'&&t.key?`openCapa(${jsArg(t.key)})`:`navigate('${t.link}')`}">
+  ${tasks.length?tasks.map(t=>`<div class="tcard ${t.status}" onclick="${t.link==='capa'&&t.key?`openCapa(${attrJsArg(t.key)})`:`navigate('${t.link}')`}">
     <div style="flex:1;"><div class="fb mb1"><span class="tsm f7">${t.title}</span>${badge(t.pri==='P1'?'b-red':t.pri==='P2'?'b-amber':'b-gray',t.pri)}</div>
     <div class="flex g2u txs td">${badge(t.status==='overdue'?'b-red':t.status==='due-soon'?'b-amber':'b-teal',t.status==='overdue'?'⏰ Overdue':t.status==='due-soon'?'⚡ Due Soon':'📅 Upcoming')}<span>${t.dueDate}</span></div></div>
     <button class="btn btn-ghost btn-sm">→</button>
@@ -5293,7 +5294,7 @@ function renderManagerPanel(){
   const byDept=codes.map(code=>{const d=APP.depts.find(x=>x.code===code)||{code,name:code};const df=open.filter(f=>f.dept===code);return{code,name:d.name,total:df.length,overdue:df.filter(f=>delayDays(f)>0).length,critical:df.filter(f=>f.sev==='critical').length};});
   return `<div class="grid g3 sg"><div class="stat"><div class="sl">Managed Depts</div><div class="sv">${codes.length}</div></div><div class="stat"><div class="sl">Open NCs</div><div class="sv">${open.length}</div></div><div class="stat"><div class="sl">Overdue</div><div class="sv" style="color:var(--red)">${overdue.length}</div></div></div>
   <div class="card sg"><div class="ch"><span class="dot" style="background:var(--amber)"></span>Department Control</div><div class="tw"><table><thead><tr><th>Dept</th><th>Open</th><th>Overdue</th><th>Critical</th><th>Action</th></tr></thead><tbody>${byDept.map(r=>`<tr><td class="pr">${r.name}</td><td>${r.total}</td><td style="color:var(--red);font-weight:800">${r.overdue}</td><td>${r.critical}</td><td><button class="btn btn-ghost btn-sm" onclick="managerSendDeptReminder('${r.code}')">Reminder</button></td></tr>`).join('')||'<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:12px;">No managed departments mapped</td></tr>'}</tbody></table></div></div>
-  <div class="card"><div class="fb mb2"><div class="ch" style="margin:0"><span class="dot" style="background:var(--red)"></span>Overdue / Open NCs</div><button class="btn btn-brand btn-sm" onclick="managerSendSummary()">Send Summary</button></div><div class="tw"><table><thead><tr><th>Ref</th><th>Dept</th><th>Issue</th><th>Severity</th><th>Due</th><th>Delay</th><th>Status</th><th>Action</th></tr></thead><tbody>${open.map(f=>`<tr><td class="pr">${f.ref}</td><td>${f.deptName}</td><td style="max-width:260px;">${sanitize((f.desc||'').substring(0,95))}</td><td>${badge(SEV_BADGE[f.sev]||'b-gray',SEV_LABEL[f.sev]||f.sev)}</td><td>${f.due||'-'}</td><td style="font-weight:800;color:${delayDays(f)>0?'var(--red)':'var(--text2)'}">${delayDays(f)}d</td><td>${badge(STAT_BADGE[f.status]||'b-gray',STAT_LABEL[f.status]||f.status)}</td><td><button class="btn btn-ghost btn-sm" onclick="openCapa(${jsArg(capaKey(f))})">Open</button></td></tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:12px;">No open NCs for managed departments</td></tr>'}</tbody></table></div></div>`;
+  <div class="card"><div class="fb mb2"><div class="ch" style="margin:0"><span class="dot" style="background:var(--red)"></span>Overdue / Open NCs</div><button class="btn btn-brand btn-sm" onclick="managerSendSummary()">Send Summary</button></div><div class="tw"><table><thead><tr><th>Ref</th><th>Dept</th><th>Issue</th><th>Severity</th><th>Due</th><th>Delay</th><th>Status</th><th>Action</th></tr></thead><tbody>${open.map(f=>`<tr><td class="pr">${f.ref}</td><td>${f.deptName}</td><td style="max-width:260px;">${sanitize((f.desc||'').substring(0,95))}</td><td>${badge(SEV_BADGE[f.sev]||'b-gray',SEV_LABEL[f.sev]||f.sev)}</td><td>${f.due||'-'}</td><td style="font-weight:800;color:${delayDays(f)>0?'var(--red)':'var(--text2)'}">${delayDays(f)}d</td><td>${badge(STAT_BADGE[f.status]||'b-gray',STAT_LABEL[f.status]||f.status)}</td><td><button class="btn btn-ghost btn-sm" onclick="openCapa(${attrJsArg(capaKey(f))})">Open</button></td></tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:12px;">No open NCs for managed departments</td></tr>'}</tbody></table></div></div>`;
 }
 function managerSendDeptReminder(code){
   const rows=managerFindings().filter(f=>f.dept===code&&f.status!=='closed');if(!rows.length){showToast('No open NCs for this department');return;}
@@ -5345,12 +5346,12 @@ function renderTrackerBody(){
     const tPages=Math.ceil(ttl/tps);if(tpg>tPages&&tPages>0)APP.trackerPage=tPages;
     const tPageData=data.slice(((APP.trackerPage||1)-1)*tps,(APP.trackerPage||1)*tps);
     data=tPageData;
-    tb.innerHTML=`<div class="tw"><table><thead><tr><th>ID</th><th>Dept</th><th>Description</th><th>Severity</th><th>Clause</th><th>Due</th><th>Status</th><th>Action</th></tr></thead><tbody>${data.map(f=>`<tr><td class="pr">${f.ref}</td><td>${f.deptName}</td><td style="max-width:180px;">${f.desc}</td><td>${badge(SEV_BADGE[f.sev]||'b-gray',SEV_LABEL[f.sev]||f.sev)}</td><td>${badge('b-blue',f.clause)}</td><td style="color:${f.status==='delayed'?'var(--red)':'inherit'}">${f.due}</td><td>${badge(STAT_BADGE[f.status]||'b-gray',STAT_LABEL[f.status]||f.status)}</td><td><button class="btn btn-ghost btn-sm" onclick="openCapa(${jsArg(capaKey(f))})">Open</button></td></tr>`).join('')}</tbody></table></div>${renderPagination(ttl,APP.trackerPage||1,tps,'setTrackerPage')}<div class="txs td mt1">${ttl} record(s)</div>`;}
+    tb.innerHTML=`<div class="tw"><table><thead><tr><th>ID</th><th>Dept</th><th>Description</th><th>Severity</th><th>Clause</th><th>Due</th><th>Status</th><th>Action</th></tr></thead><tbody>${data.map(f=>`<tr><td class="pr">${f.ref}</td><td>${f.deptName}</td><td style="max-width:180px;">${f.desc}</td><td>${badge(SEV_BADGE[f.sev]||'b-gray',SEV_LABEL[f.sev]||f.sev)}</td><td>${badge('b-blue',f.clause)}</td><td style="color:${f.status==='delayed'?'var(--red)':'inherit'}">${f.due}</td><td>${badge(STAT_BADGE[f.status]||'b-gray',STAT_LABEL[f.status]||f.status)}</td><td><button class="btn btn-ghost btn-sm" onclick="openCapa(${attrJsArg(capaKey(f))})">Open</button></td></tr>`).join('')}</tbody></table></div>${renderPagination(ttl,APP.trackerPage||1,tps,'setTrackerPage')}<div class="txs td mt1">${ttl} record(s)</div>`;}
   if(APP.trackerTab==='capa'){
     let data=filteredFindings().filter(f=>f.status!=='closed'&&(APP.currentUser?.role!=='spoc'||f.dept===APP.currentUser?.dept)&&(APP.currentUser?.role!=='manager'||managerDeptCodes().includes(f.dept)));if(q)data=data.filter(f=>[f.ref,f.deptName,f.desc].join(' ').toLowerCase().includes(q));
     const cpg=APP.trackerPage||1;const cps2=APP.pageSize;const ctl=data.length;
     data=data.slice((cpg-1)*cps2,cpg*cps2);
-    tb.innerHTML=`<div class="tw"><table><thead><tr><th>Ref</th><th>Dept</th><th>Issue</th><th>Severity</th><th>Due</th><th>Days</th><th>Status</th><th>Action</th></tr></thead><tbody>${data.map(f=>{const dl=Math.round((new Date(f.due)-new Date())/86400000);return`<tr><td class="pr">${f.ref}</td><td>${f.deptName}</td><td style="max-width:160px;">${(f.desc||'').substring(0,55)}</td><td>${badge(SEV_BADGE[f.sev]||'b-gray',SEV_LABEL[f.sev]||f.sev)}</td><td>${f.due}</td><td style="color:${dl<0?'var(--red)':dl<=3?'var(--amber)':'inherit'};font-weight:${dl<0?800:400};">${dl<0?`${Math.abs(dl)}d over`:`${dl}d`}</td><td>${badge(STAT_BADGE[f.status]||'b-gray',STAT_LABEL[f.status]||f.status)}</td><td><button class="btn btn-ghost btn-sm" onclick="openCapa(${jsArg(capaKey(f))})">Open</button></td></tr>`;}).join('')}</tbody></table></div>${renderPagination(ctl,cpg,cps2,'setTrackerPage')}<div class="txs td mt1">${ctl} open CAPA(s)</div>`;}
+    tb.innerHTML=`<div class="tw"><table><thead><tr><th>Ref</th><th>Dept</th><th>Issue</th><th>Severity</th><th>Due</th><th>Days</th><th>Status</th><th>Action</th></tr></thead><tbody>${data.map(f=>{const dl=Math.round((new Date(f.due)-new Date())/86400000);return`<tr><td class="pr">${f.ref}</td><td>${f.deptName}</td><td style="max-width:160px;">${(f.desc||'').substring(0,55)}</td><td>${badge(SEV_BADGE[f.sev]||'b-gray',SEV_LABEL[f.sev]||f.sev)}</td><td>${f.due}</td><td style="color:${dl<0?'var(--red)':dl<=3?'var(--amber)':'inherit'};font-weight:${dl<0?800:400};">${dl<0?`${Math.abs(dl)}d over`:`${dl}d`}</td><td>${badge(STAT_BADGE[f.status]||'b-gray',STAT_LABEL[f.status]||f.status)}</td><td><button class="btn btn-ghost btn-sm" onclick="openCapa(${attrJsArg(capaKey(f))})">Open</button></td></tr>`;}).join('')}</tbody></table></div>${renderPagination(ctl,cpg,cps2,'setTrackerPage')}<div class="txs td mt1">${ctl} open CAPA(s)</div>`;}
   if(APP.trackerTab==='learnings'){
     let data=scopedLearnings();if(q)data=data.filter(l=>[l.title,l.rc,l.pa,l.clause].join(' ').toLowerCase().includes(q));
     const lpg=APP.trackerPage||1;const lps=APP.pageSize;const ltl=data.length;
