@@ -475,6 +475,19 @@ input:focus,select:focus,textarea:focus{border-color:var(--brand);background:var
   </div>
 </div>
 
+<!-- FINDING RECORD MODAL -->
+<div class="mbg hidden" id="m-finding-record">
+  <div class="modal">
+    <div class="mh"><span id="fr-mtitle">Edit Finding</span><button class="btn btn-ghost btn-icon btn-sm" onclick="closeM('m-finding-record')">x</button></div>
+    <div class="grid g2 mb2" style="gap:9px;"><div><label class="lbl">CAPA / Finding No. *</label><input id="fr-ref" placeholder="DES-2026-001"></div><div><label class="lbl">Department *</label><select id="fr-dept"></select></div></div>
+    <div class="grid g2 mb2" style="gap:9px;"><div><label class="lbl">Severity *</label><select id="fr-sev"><option value="critical">Critical</option><option value="major">Major</option><option value="minor">Minor</option><option value="obs">Observation</option></select></div><div><label class="lbl">Status *</label><select id="fr-status"><option value="open">Open</option><option value="in-progress">In Progress</option><option value="delayed">Delayed</option><option value="pending-closure">Submit For Review</option><option value="closed">Closed</option></select></div></div>
+    <div class="grid g2 mb2" style="gap:9px;"><div><label class="lbl">Clause</label><input id="fr-clause" placeholder="AS9100D clause"></div><div><label class="lbl">Due Date</label><input id="fr-due" type="date"></div></div>
+    <div class="mb2"><label class="lbl">Description *</label><textarea id="fr-desc" style="height:76px;resize:none;" placeholder="Finding description"></textarea></div>
+    <input type="hidden" id="fr-key">
+    <div class="flex g2u"><button class="btn btn-ghost" style="flex:1" onclick="closeM('m-finding-record')">Cancel</button><button class="btn btn-primary" style="flex:1" onclick="saveFindingRecord()">Save</button></div>
+  </div>
+</div>
+
 <!-- CHECKPOINT MODAL -->
 <div class="mbg hidden" id="m-cp">
   <div class="modal">
@@ -820,6 +833,14 @@ function _findingSyncTime(f){
   var t=raw?Date.parse(raw):0;
   return isNaN(t)?0:t;
 }
+function _findingDeletedTime(f){
+  var raw=(f&&f.deletedAt)||'';
+  var t=raw?Date.parse(raw):0;
+  return isNaN(t)?0:t;
+}
+function _isDeletedFinding(f){
+  return !!(f&&f.deletedAt);
+}
 function _hasReviewDecision(f){
   var d=String((f&&f.decision)||'').toLowerCase();
   return d==='accept'||d==='reject';
@@ -927,6 +948,11 @@ function _chooseFindingForSync(local,remote){
   if(!remote)return local;
   local=normalizeFindingSyncObject(local);
   remote=normalizeFindingSyncObject(remote);
+  if(_isDeletedFinding(local)||_isDeletedFinding(remote)){
+    var ld=_findingDeletedTime(local),rd=_findingDeletedTime(remote);
+    if(ld||rd)return rd>=ld?remote:local;
+    return _isDeletedFinding(remote)?remote:local;
+  }
   var lp=_isPendingReviewFinding(local),rp=_isPendingReviewFinding(remote);
   var lr=_isReviewedOrClosedFinding(local),rr=_isReviewedOrClosedFinding(remote);
   if(lp||rp){
@@ -1236,7 +1262,7 @@ const APP={
   get depts()       {return LS.get('ap_depts',[]);},              set depts(v)      {LS.set('ap_depts',v);},
   get auditors()    {return LS.get('ap_auds',[]);},               set auditors(v)   {LS.set('ap_auds',v);},
   get checkpoints() {return LS.get('ap_cps',[]);},                set checkpoints(v){LS.set('ap_cps',v);},
-  get findings()    {const r=normalizeFindingsData(LS.get('ap_finds',[]));if(r.changed)LS.set('ap_finds',r.value);return r.value;},   set findings(v)   {LS.set('ap_finds',normalizeFindingsData(v).value);},
+  get findings()    {const r=normalizeFindingsData(LS.get('ap_finds',[]));if(r.changed)LS.set('ap_finds',r.value);return r.value.filter(f=>!_isDeletedFinding(f));},   set findings(v)   {LS.set('ap_finds',normalizeFindingsData(v).value);},
   get notifications(){return LS.get('ap_notifs',[]);},            set notifications(v){LS.set('ap_notifs',v);},
   get sections()    {return LS.get('ap_secs',[]);},               set sections(v)   {LS.set('ap_secs',v);},
   get learnings()   {return LS.get('ap_learns',[]);},             set learnings(v)  {LS.set('ap_learns',v);},
@@ -4286,13 +4312,13 @@ function renderFindingsTable(){
   const pageData=data.slice((pg-1)*ps,pg*ps);
   const fpag=el('fpagination');if(fpag)fpag.innerHTML=renderPagination(data.length,pg,ps,'setFindingsPage');
   tbody.innerHTML=pageData.map(f=>`<tr>
-    <td class="pr">${f.ref}</td><td>${f.deptName}</td>
-    <td style="max-width:200px;">${f.desc}</td>
+    <td class="pr">${sanitize(f.ref)}</td><td>${sanitize(f.deptName)}</td>
+    <td style="max-width:200px;">${sanitize(f.desc)}</td>
     <td>${badge(SEV_BADGE[f.sev]||'b-gray',SEV_LABEL[f.sev]||f.sev)}</td>
     <td>${badge('b-blue',f.clause)}</td>
-    <td style="color:${f.status==='delayed'?'var(--red)':'inherit'};font-weight:${f.status==='delayed'?800:400};">${f.due}</td>
+    <td style="color:${f.status==='delayed'?'var(--red)':'inherit'};font-weight:${f.status==='delayed'?800:400};">${sanitize(f.due)}</td>
     <td>${badge(STAT_BADGE[f.status]||'b-gray',STAT_LABEL[f.status]||f.status)}${f.type==='repeat'?' '+badge('b-purple','Repeat'):''}</td>
-    ${role!=='viewer'?`<td><button class="btn btn-ghost btn-sm" onclick="openCapa(${attrJsArg(capaKey(f))})">CAPA →</button></td>`:'<td>—</td>'}
+    ${role!=='viewer'?`<td><div class="flex g1u fw"><button class="btn btn-ghost btn-sm" onclick="openCapa(${attrJsArg(capaKey(f))})">CAPA</button>${findingRecordActions(f)}</div></td>`:'<td>-</td>'}
   </tr>`).join('')||'<tr><td colspan="8" style="text-align:center;padding:18px;color:var(--text3);">No findings match filters</td></tr>';
   if(cnt)cnt.textContent=data.length+' record(s)';
   // Restore filter values
@@ -4307,6 +4333,104 @@ function renderFindingsTable(){
 function setFindingsPage(p){APP.findingsPage=Math.max(1,p);renderFindingsTable();}
 function sortFindings(f){if(APP.findingsSortField===f)APP.findingsSortAsc=!APP.findingsSortAsc;else{APP.findingsSortField=f;APP.findingsSortAsc=true;}renderFindingsTable();}
 function clearFindingsFilters(){APP.findingsSearch='';APP.findingsDeptFilter='';APP.findingsSevFilter='';APP.findingsStatusFilter='';renderFindingsTable();}
+function rawFindings(){
+  var r=normalizeFindingsData(LS.get('ap_finds',[]));
+  if(r.changed)LS.set('ap_finds',r.value);
+  return r.value;
+}
+function canEditFindingRecord(f){
+  var role=APP.currentUser&&APP.currentUser.role;
+  if(role==='admin'||role==='auditor')return true;
+  if(role==='manager')return managerDeptCodes().indexOf(f&&f.dept)>-1;
+  return false;
+}
+function canDeleteFindingRecord(f){
+  return canEditFindingRecord(f);
+}
+function findingRecordActions(f){
+  if(!canEditFindingRecord(f))return '';
+  var key=capaKey(f);
+  return `<button class="btn btn-ghost btn-sm" onclick="openFindingRecordModal(${attrJsArg(key)})">Edit</button><button class="btn btn-danger btn-sm" onclick="deleteFindingRecord(${attrJsArg(key)})">Delete</button>`;
+}
+function deptNameFromCode(code){
+  var d=APP.depts.find(function(row){return row.code===code;});
+  return d?d.name:code;
+}
+function openFindingRecordModal(key){
+  var f=findCapa(key);
+  if(!f||!canEditFindingRecord(f)){showToast('Access denied for this finding');return;}
+  el('fr-key').value=capaKey(f);
+  el('fr-ref').value=f.ref||'';
+  var deptSel=el('fr-dept');
+  deptSel.innerHTML=APP.depts.map(function(d){return '<option value="'+sanitize(d.code)+'">'+sanitize(d.code+' - '+d.name)+'</option>';}).join('');
+  deptSel.value=f.dept||'';
+  el('fr-sev').value=normalizeAuditSeverity(f.sev||f.severity)||'minor';
+  el('fr-status').value=findingWorkflowStatus(f)||'open';
+  el('fr-clause').value=f.clause||'';
+  el('fr-due').value=dateInputValue(f.due)||'';
+  el('fr-desc').value=f.desc||'';
+  openM('m-finding-record');
+}
+function saveFindingRecord(){
+  var key=el('fr-key').value;
+  var rows=rawFindings();
+  var idx=rows.findIndex(function(x){return !x.deletedAt&&capaKey(x)===key;});
+  if(idx<0){showToast('Finding not found');return;}
+  var f=rows[idx];
+  if(!canEditFindingRecord(f)){showToast('Access denied for this finding');return;}
+  var ref=el('fr-ref').value.trim();
+  var dept=el('fr-dept').value;
+  var desc=el('fr-desc').value.trim();
+  var status=el('fr-status').value;
+  if(!ref||!dept||!desc){showToast('CAPA no, department and description are required');return;}
+  var duplicate=rows.find(function(x,i){return i!==idx&&!x.deletedAt&&String(x.ref||'')===ref;});
+  if(duplicate){showToast('CAPA/Finding no. already exists');return;}
+  var prevRef=f.ref;
+  var patch={
+    ref:ref,
+    dept:dept,
+    deptName:deptNameFromCode(dept),
+    sev:el('fr-sev').value,
+    clause:el('fr-clause').value.trim()||'-',
+    due:el('fr-due').value||'',
+    desc:desc,
+    status:status,
+    capaStatus:status==='pending-closure'?'submitted':status
+  };
+  rows[idx]=Object.assign({},f,patch);
+  touchFinding(rows[idx]);
+  rows[idx].activityLog=Array.isArray(rows[idx].activityLog)?rows[idx].activityLog:[];
+  rows[idx].activityLog.push({user:APP.currentUser?.name||'System',action:'Finding record edited',ts:new Date().toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'})});
+  LS.set('ap_finds',normalizeFindingsData(rows).value);
+  APP.activeCapaId=capaKey(rows[idx]);
+  closeM('m-finding-record');
+  if(APP.currentPage==='findings')renderFindingsTable();else renderPage(APP.currentPage||'capa');
+  buildNav();
+  showToast(prevRef===ref?'Finding updated':'Finding updated: '+prevRef+' -> '+ref);
+}
+function deleteFindingRecord(key){
+  var f=findCapa(key);
+  if(!f||!canDeleteFindingRecord(f)){showToast('Access denied for this finding');return;}
+  confirmAct('Delete '+(f.ref||'this finding')+'? It will be removed from Findings, CAPA and trackers.',function(){
+    var rows=rawFindings();
+    var idx=rows.findIndex(function(x){return !x.deletedAt&&capaKey(x)===key;});
+    if(idx<0){showToast('Finding already deleted');return;}
+    var now=new Date().toISOString();
+    rows[idx]=Object.assign({},rows[idx],{
+      deletedAt:now,
+      deletedBy:(APP.currentUser&&APP.currentUser.loginId)||'browser',
+      status:'deleted',
+      capaStatus:'deleted',
+      updatedAt:now,
+      activityLog:(Array.isArray(rows[idx].activityLog)?rows[idx].activityLog:[]).concat([{user:APP.currentUser?.name||'System',action:'Finding deleted',ts:new Date().toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'})}])
+    });
+    LS.set('ap_finds',normalizeFindingsData(rows).value);
+    APP.activeCapaId='';
+    if(APP.currentPage==='findings')renderFindingsTable();else renderPage(APP.currentPage||'capa');
+    buildNav();
+    showToast('Finding deleted');
+  });
+}
 function exportFindingsExcel(){
   if(!window.XLSX){showToast('Excel loading...');return;}
   const ws=XLSX.utils.json_to_sheet(APP.findings.map(f=>({ID:f.ref,Department:f.deptName,Description:f.desc,Severity:SEV_LABEL[f.sev],Clause:f.clause,DueDate:f.due,Status:STAT_LABEL[f.status]})));
@@ -4406,6 +4530,8 @@ function renderCapaDetail(f){
   <div class="ch mt2"><span class="dot" style="background:var(--teal)"></span>Activity Log</div>
   ${renderCapaActivityLog(f)}
   <div class="flex g2u fw mt3">
+    ${canEditFindingRecord(f)?`<button class="btn btn-primary btn-sm" onclick="openFindingRecordModal(${attrJsArg(key)})">Edit Finding</button>`:``}
+    ${canDeleteFindingRecord(f)?`<button class="btn btn-danger btn-sm" onclick="deleteFindingRecord(${attrJsArg(key)})">Delete</button>`:``}
     ${canClose&&ws!=='closed'&&ws!=='pending-closure'?`<button class="btn btn-success btn-sm" onclick="openClosureModal(${attrJsArg(key)})">Submit For Review</button>`:``}
     ${canReview&&ws==='pending-closure'?`<button class="btn btn-primary btn-sm" onclick="openReviewModal(${attrJsArg(key)})">Review Closure</button>`:``}
     ${role==='admin'&&ws!=='closed'&&ws!=='pending-closure'?`<button class="btn btn-amber btn-sm" onclick="updateCapaStatus(${attrJsArg(key)},'closed')">Force Close</button>`:``}

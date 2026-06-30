@@ -289,6 +289,29 @@ function mergeEmailLogs(existing, incoming, clearedAt) {
     .slice(0, 500);
 }
 
+function userMergeKey(user) {
+  if (!user || typeof user !== 'object') return '';
+  return String(user.id || user.loginId || user.email || '').trim().toLowerCase();
+}
+
+function mergeUsersForSync(existing, incoming) {
+  if (!Array.isArray(incoming)) return incoming;
+  if (!Array.isArray(existing) || !existing.length) return incoming;
+  if (incoming.length === 1 && existing.length > 1) {
+    const byKey = new Map();
+    existing.forEach(user => {
+      const key = userMergeKey(user);
+      if (key) byKey.set(key, user);
+    });
+    incoming.forEach(user => {
+      const key = userMergeKey(user);
+      if (key) byKey.set(key, Object.assign({}, byKey.get(key) || {}, user));
+    });
+    return Array.from(byKey.values());
+  }
+  return incoming;
+}
+
 function findingKey(finding) {
   if (!finding || typeof finding !== 'object') return '';
   return String(finding.id || finding.ref || '').trim();
@@ -299,6 +322,17 @@ function findingUpdatedTime(finding) {
   const raw = finding.updatedAt || finding.findingUpdatedAt || '';
   const time = raw ? Date.parse(raw) : 0;
   return Number.isFinite(time) ? time : 0;
+}
+
+function findingDeletedTime(finding) {
+  if (!finding || typeof finding !== 'object') return 0;
+  const raw = finding.deletedAt || '';
+  const time = raw ? Date.parse(raw) : 0;
+  return Number.isFinite(time) ? time : 0;
+}
+
+function isDeletedFinding(finding) {
+  return Boolean(finding && finding.deletedAt);
 }
 
 function hasReviewDecision(finding) {
@@ -539,6 +573,13 @@ function chooseFindingForSync(current, incoming) {
   incoming = normalizeFindingSyncState(incoming);
   if (!current) return incoming;
   if (!incoming) return current;
+
+  if (isDeletedFinding(current) || isDeletedFinding(incoming)) {
+    const currentDeleted = findingDeletedTime(current);
+    const incomingDeleted = findingDeletedTime(incoming);
+    if (currentDeleted || incomingDeleted) return incomingDeleted >= currentDeleted ? incoming : current;
+    return isDeletedFinding(incoming) ? incoming : current;
+  }
 
   const currentPending = isPendingReviewFinding(current);
   const incomingPending = isPendingReviewFinding(incoming);
@@ -806,6 +847,11 @@ app.put('/api/sync/:key', wrapAsync(async (req, res) => {
     incomingValue = mergeFindingsForSync(current && current.value, incomingValue);
   }
 
+  if (key === 'ap_users') {
+    const current = await collection.findOne({ key });
+    incomingValue = mergeUsersForSync(current && current.value, incomingValue);
+  }
+
   if (key === 'ap_audit_drafts') {
     const current = await collection.findOne({ key });
     incomingValue = mergeAuditDraftsForSync(current && current.value, incomingValue);
@@ -835,7 +881,7 @@ app.post('/api/sync/bulk', wrapAsync(async (req, res) => {
   const collection = await getCollection();
   const now = new Date();
   for (const key of keys) {
-    const current = key === 'ap_finds' || key === 'ap_audit_drafts' || key === 'ap_email_logs'
+    const current = key === 'ap_finds' || key === 'ap_audit_drafts' || key === 'ap_email_logs' || key === 'ap_users'
       ? await collection.findOne({ key })
       : null;
     if (key === 'ap_finds') {
@@ -846,6 +892,9 @@ app.post('/api/sync/bulk', wrapAsync(async (req, res) => {
     }
     if (key === 'ap_email_logs') {
       items[key] = mergeEmailLogs(current && current.value, items[key], current && current.clearedAt);
+    }
+    if (key === 'ap_users') {
+      items[key] = mergeUsersForSync(current && current.value, items[key]);
     }
   }
   await collection.bulkWrite(keys.map(key => ({
@@ -1221,13 +1270,20 @@ app.post('/api/auth/forgot-password', wrapAsync(async (req, res) => {
   ].join('\n');
   const html = `<p>Hello ${user.name || user.loginId},</p><p>Your OnePWS AuditPro password reset OTP is <strong style="font-size:18px;letter-spacing:3px;">${otp}</strong>.</p><p>This OTP is valid for 15 minutes.</p><p>If you did not request this reset, please ignore this email.</p>`;
 
-  await transport.sendMail({
-    from: SMTP_FROM,
-    to: user.email,
-    subject,
-    text,
-    html
-  });
+  try {
+    await transport.sendMail({
+      from: SMTP_FROM,
+      to: user.email,
+      subject,
+      text,
+      html
+    });
+  } catch (err) {
+    await deletePasswordResetOtp(collection, user.id);
+    err.statusCode = 502;
+    err.message = `Password reset email could not be sent: ${err.message}`;
+    throw err;
+  }
 
   res.json({ ok: true, maskedEmail: user.email.replace(/^(.).+(@.+)$/, '$1***$2') });
 }));
