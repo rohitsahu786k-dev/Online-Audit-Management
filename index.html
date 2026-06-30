@@ -700,25 +700,72 @@ function _hasReviewDecision(f){
   var d=String((f&&f.decision)||'').toLowerCase();
   return d==='accept'||d==='reject';
 }
+function _parseAuditTimestamp(v){
+  var raw=String(v||'').trim();
+  if(!raw)return 0;
+  var direct=Date.parse(raw);
+  if(!isNaN(direct))return direct;
+  var m=raw.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})(?:,\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AP]M|am|pm)?)?/);
+  if(!m)return 0;
+  var h=Number(m[4]||0),mi=Number(m[5]||0),s=Number(m[6]||0),ap=String(m[7]||'').toLowerCase();
+  if(ap==='pm'&&h<12)h+=12;
+  if(ap==='am'&&h===12)h=0;
+  var t=new Date(Number(m[3]),Number(m[2])-1,Number(m[1]),h,mi,s).getTime();
+  return isNaN(t)?0:t;
+}
+function _isClosureSubmissionAction(action){
+  return /(closure submitted|submitted for review|submitted closure)/i.test(String(action||''));
+}
+function _isReviewDecisionAction(action){
+  return /closure (accepted|rejected)/i.test(String(action||''));
+}
+function _latestWorkflowSignal(f,fields,matchFn){
+  var signal={exists:false,time:0,index:-1};
+  if(!f||typeof f!=='object')return signal;
+  fields.forEach(function(field){
+    var raw=f[field];
+    var time=_parseAuditTimestamp(raw);
+    if(time&&time>=signal.time){signal.exists=true;signal.time=time;signal.index=-1;}
+    else if(String(raw||'').trim()){signal.exists=true;}
+  });
+  var logs=Array.isArray(f.activityLog)?f.activityLog:[];
+  logs.forEach(function(log,idx){
+    if(!matchFn(String((log&&log.action)||'')))return;
+    var time=_parseAuditTimestamp(log&&log.ts);
+    signal.exists=true;
+    if((time&&time>=signal.time)||(!signal.time&&idx>=signal.index)){
+      signal.time=time||signal.time;
+      signal.index=idx;
+    }
+  });
+  return signal;
+}
+function _closureSubmissionSignal(f){
+  var signal=_latestWorkflowSignal(f,['closureSubmittedAt','closureSubmitAt','closureDate'],_isClosureSubmissionAction);
+  if(!signal.exists&&f&&typeof f==='object'){
+    signal.exists=!!(String(f.closureEvidence||'').trim()||String(f.closureSubmittedBy||'').trim());
+  }
+  return signal;
+}
+function _reviewDecisionSignal(f){
+  return _latestWorkflowSignal(f,['decisionAt','reviewedAt','decisionDate','auditClosureDate','closedAt'],_isReviewDecisionAction);
+}
 function _hasClosureSubmission(f){
   if(!f||typeof f!=='object')return false;
   if(String(f.closureEvidence||'').trim())return true;
   if(String(f.closureSubmittedBy||'').trim()||String(f.closureDate||'').trim())return true;
   return Array.isArray(f.activityLog)&&f.activityLog.some(function(log){
-    return /(closure submitted|submitted for review)/i.test(String((log&&log.action)||''));
+    return _isClosureSubmissionAction(String((log&&log.action)||''));
   });
 }
 function _hasUnreviewedClosureSubmission(f){
   if(!_hasClosureSubmission(f))return false;
   if(!_hasReviewDecision(f))return true;
-  var logs=Array.isArray(f&&f.activityLog)?f.activityLog:[];
-  var submitIdx=-1,decisionIdx=-1;
-  logs.forEach(function(log,idx){
-    var action=String((log&&log.action)||'');
-    if(/(closure submitted|submitted for review)/i.test(action))submitIdx=idx;
-    if(/closure (accepted|rejected)/i.test(action))decisionIdx=idx;
-  });
-  return submitIdx>-1&&submitIdx>decisionIdx;
+  var submit=_closureSubmissionSignal(f),decision=_reviewDecisionSignal(f);
+  if(!submit.exists||!decision.exists)return false;
+  if(submit.time&&decision.time)return submit.time>decision.time;
+  if(submit.index>-1&&decision.index>-1)return submit.index>decision.index;
+  return false;
 }
 function _isPendingReviewFinding(f){
   return findingWorkflowStatus(f)==='pending-closure';
@@ -735,6 +782,19 @@ function findingWorkflowStatus(f){
 function _chooseFindingForSync(local,remote){
   if(!local)return remote;
   if(!remote)return local;
+  local=normalizeFindingSyncObject(local);
+  remote=normalizeFindingSyncObject(remote);
+  var lp=_isPendingReviewFinding(local),rp=_isPendingReviewFinding(remote);
+  if(lp||rp){
+    var lr0=_hasReviewDecision(local)||String(local.status||'').toLowerCase()==='closed';
+    var rr0=_hasReviewDecision(remote)||String(remote.status||'').toLowerCase()==='closed';
+    if(lp&&!rp&&!rr0)return _withMergedFindingLogs(local,remote);
+    if(rp&&!lp&&!lr0)return _withMergedFindingLogs(remote,local);
+    if(lp&&rp){
+      var lm=_workflowMeaningfulTime(local),rm=_workflowMeaningfulTime(remote);
+      return _withMergedFindingLogs(rm>lm?remote:local,rm>lm?local:remote);
+    }
+  }
   var lt=_findingSyncTime(local),rt=_findingSyncTime(remote);
   if(lt||rt)return rt>=lt?remote:local;
   var lr=_hasReviewDecision(local)||String(local.status||'').toLowerCase()==='closed';
@@ -743,9 +803,57 @@ function _chooseFindingForSync(local,remote){
   if(rr&&_isPendingReviewFinding(local)&&!lr)return remote;
   return remote;
 }
+function _workflowMeaningfulTime(f){
+  return Math.max(_findingSyncTime(f),_closureSubmissionSignal(f).time||0,_reviewDecisionSignal(f).time||0);
+}
+function _mergeFindingLogs(a,b){
+  var rows=[].concat(Array.isArray(a&&a.activityLog)?a.activityLog:[],Array.isArray(b&&b.activityLog)?b.activityLog:[]);
+  var seen={};
+  return rows.filter(function(log){
+    if(!log||typeof log!=='object')return false;
+    var key=[log.user||'',log.action||'',log.ts||''].join('|');
+    if(seen[key])return false;
+    seen[key]=1;
+    return true;
+  }).slice(-200);
+}
+function _withMergedFindingLogs(selected,other){
+  if(!selected||!other)return selected;
+  var logs=_mergeFindingLogs(selected,other);
+  if(logs.length===(Array.isArray(selected.activityLog)?selected.activityLog.length:0))return selected;
+  return Object.assign({},selected,{activityLog:logs});
+}
+function normalizeFindingSyncObject(f){
+  if(!f||typeof f!=='object')return f;
+  var item=Object.assign({},f);
+  var status=String(item.status||'').toLowerCase();
+  var capaStatus=String(item.capaStatus||'').toLowerCase();
+  var decision=String(item.decision||'').toLowerCase();
+  var pendingSignal=status==='pending-closure'||capaStatus==='submitted';
+  var unreviewed=_hasUnreviewedClosureSubmission(item);
+  if(pendingSignal&&(decision==='accept'||decision==='reject')){
+    if(unreviewed){
+      item.decision=null;item.decisionComments='';item.decisionDate=null;item.auditClosureDate=null;item.closedAt=null;
+    }else{
+      item.status=decision==='accept'?'closed':'open';
+      item.capaStatus=decision==='accept'?'closed':'open';
+    }
+    status=String(item.status||'').toLowerCase();
+    capaStatus=String(item.capaStatus||'').toLowerCase();
+  }
+  if((status==='delayed'||capaStatus==='delayed')&&unreviewed){
+    item.status='pending-closure';item.capaStatus='submitted';
+    if(decision==='accept'||decision==='reject'){
+      item.decision=null;item.decisionComments='';item.decisionDate=null;item.auditClosureDate=null;item.closedAt=null;
+    }
+  }
+  return item;
+}
 function _mergeFindingsForSync(local,remote){
   if(!Array.isArray(remote))return remote;
+  remote=remote.map(normalizeFindingSyncObject);
   if(!Array.isArray(local)||!local.length)return remote;
+  local=local.map(normalizeFindingSyncObject);
   var byKey={},seen={},out=[];
   local.forEach(function(f){var k=_findingSyncKey(f);if(k)byKey[k]=f;});
   remote.forEach(function(f){
@@ -1338,19 +1446,19 @@ function normalizeFindingsData(data){
     var decisionText=String(f.decision||'').toLowerCase();
     var pendingSignal=statusText==='pending-closure'||capaStatusText==='submitted';
     if(pendingSignal&&(decisionText==='accept'||decisionText==='reject')){
-      updates.decision=null;updates.decisionComments='';updates.decisionDate=null;changed=true;
-      if(decisionText==='accept'){updates.auditClosureDate=null;updates.closedAt=null;}
-      decisionText='';
-    }
-    if(!pendingSignal&&decisionText==='reject'&&statusText==='pending-closure'){
-      updates.status='open';updates.capaStatus='open';changed=true;
-      statusText='open';capaStatusText='open';
+      if(_hasUnreviewedClosureSubmission(Object.assign({},f,updates))){
+        updates.decision=null;updates.decisionComments='';updates.decisionDate=null;updates.auditClosureDate=null;updates.closedAt=null;changed=true;
+        decisionText='';
+      }else{
+        updates.status=decisionText==='accept'?'closed':'open';updates.capaStatus=decisionText==='accept'?'closed':'open';changed=true;
+        statusText=updates.status;capaStatusText=updates.capaStatus;
+      }
     }
     if(!pendingSignal&&decisionText==='accept'&&statusText!=='closed'){
       updates.status='closed';updates.capaStatus='closed';changed=true;
       statusText='closed';capaStatusText='closed';
     }
-    if(statusText==='delayed'&&capaStatusText==='delayed'&&_hasUnreviewedClosureSubmission(Object.assign({},f,updates))){
+    if((statusText==='delayed'||capaStatusText==='delayed')&&_hasUnreviewedClosureSubmission(Object.assign({},f,updates))){
       updates.status='pending-closure';updates.capaStatus='submitted';changed=true;
       if(decisionText==='accept'||decisionText==='reject'){
         updates.decision=null;updates.decisionComments='';updates.decisionDate=null;updates.auditClosureDate=null;updates.closedAt=null;
@@ -3955,9 +4063,11 @@ function openClosureModal(key){
 function submitClosure(){
   const ev=el('cl-ev').value.trim();if(!ev){showToast('⚠ Describe the closure');return;}
   const key=APP.activeReviewId;const F=APP.findings;const f=findCapa(key,F);if(!f)return;
+  const nowIso=new Date().toISOString();
   f.status='pending-closure';f.capaStatus='submitted';f.closureEvidence=ev;
   f.closureFiles=APP.closureFiles.slice();f.closureSubmittedBy=APP.currentUser?.name;
   f.closureDate=new Date().toLocaleDateString('en-IN');
+  f.closureSubmittedAt=nowIso;
   f.decision=null;f.decisionComments='';f.decisionDate=null;f.auditClosureDate=null;f.closedAt=null;
   f.activityLog=f.activityLog||[];touchFinding(f);f.activityLog.push({user:APP.currentUser?.name,action:'Submitted for review',ts:new Date().toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'})});
   APP.findings=F;APP.activeCapaId=capaKey(f);closeM('m-closure');addNotif('closure','Submitted For Review',`${f.ref}: ${APP.currentUser?.name} submitted closure for review`,'capa',['admin','auditor']);
@@ -3978,7 +4088,7 @@ function reviewDec(dec){
     if(!auditClosureDate||!selected){showToast('⚠ Select audit closure date');return;}
     if(today&&selected>today){showToast('⚠ Audit closure date cannot be future');return;}
   }
-  f.decision=dec;f.decisionComments=cmt;f.decisionDate=new Date().toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'});
+  f.decision=dec;f.decisionComments=cmt;f.decisionDate=new Date().toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'});f.decisionAt=new Date().toISOString();
   f.status=dec==='accept'?'closed':'open';f.capaStatus=dec==='accept'?'closed':'open';
   f.auditClosureDate=dec==='accept'?auditClosureDate:null;
   f.closedAt=dec==='accept'?dateInputToLocalStart(auditClosureDate):null;touchFinding(f);

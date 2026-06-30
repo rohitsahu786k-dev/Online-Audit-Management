@@ -304,25 +304,97 @@ function hasReviewDecision(finding) {
   return decision === 'accept' || decision === 'reject';
 }
 
+function parseAuditTimestamp(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return 0;
+  const direct = Date.parse(raw);
+  if (Number.isFinite(direct)) return direct;
+  const match = raw.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:,\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AP]M|am|pm)?)?/);
+  if (!match) return 0;
+  let hour = Number(match[4] || 0);
+  const minute = Number(match[5] || 0);
+  const second = Number(match[6] || 0);
+  const meridiem = String(match[7] || '').toLowerCase();
+  if (meridiem === 'pm' && hour < 12) hour += 12;
+  if (meridiem === 'am' && hour === 12) hour = 0;
+  const time = new Date(Number(match[3]), Number(match[2]) - 1, Number(match[1]), hour, minute, second).getTime();
+  return Number.isFinite(time) ? time : 0;
+}
+
+function isClosureSubmissionAction(action) {
+  return /(closure submitted|submitted for review|submitted closure)/i.test(String(action || ''));
+}
+
+function isReviewDecisionAction(action) {
+  return /closure (accepted|rejected)/i.test(String(action || ''));
+}
+
+function latestWorkflowSignal(finding, fields, actionMatch) {
+  const signal = { exists: false, time: 0, index: -1 };
+  if (!finding || typeof finding !== 'object') return signal;
+
+  fields.forEach(field => {
+    const time = parseAuditTimestamp(finding[field]);
+    if (time && time >= signal.time) {
+      signal.exists = true;
+      signal.time = time;
+      signal.index = -1;
+    } else if (String(finding[field] || '').trim()) {
+      signal.exists = true;
+    }
+  });
+
+  const logs = Array.isArray(finding.activityLog) ? finding.activityLog : [];
+  logs.forEach((log, index) => {
+    if (!actionMatch(String((log && log.action) || ''))) return;
+    const time = parseAuditTimestamp(log && log.ts);
+    signal.exists = true;
+    if ((time && time >= signal.time) || (!signal.time && index >= signal.index)) {
+      signal.time = time || signal.time;
+      signal.index = index;
+    }
+  });
+
+  return signal;
+}
+
+function closureSubmissionSignal(finding) {
+  const signal = latestWorkflowSignal(
+    finding,
+    ['closureSubmittedAt', 'closureSubmitAt', 'closureDate'],
+    isClosureSubmissionAction
+  );
+  if (!signal.exists && finding && typeof finding === 'object') {
+    signal.exists = Boolean(String(finding.closureEvidence || '').trim() || String(finding.closureSubmittedBy || '').trim());
+  }
+  return signal;
+}
+
+function reviewDecisionSignal(finding) {
+  return latestWorkflowSignal(
+    finding,
+    ['decisionAt', 'reviewedAt', 'decisionDate', 'auditClosureDate', 'closedAt'],
+    isReviewDecisionAction
+  );
+}
+
 function hasClosureSubmission(finding) {
   if (!finding || typeof finding !== 'object') return false;
   if (String(finding.closureEvidence || '').trim()) return true;
   if (String(finding.closureSubmittedBy || '').trim() || String(finding.closureDate || '').trim()) return true;
-  return Array.isArray(finding.activityLog) && finding.activityLog.some(log => /(closure submitted|submitted for review)/i.test(String((log && log.action) || '')));
+  return Array.isArray(finding.activityLog) && finding.activityLog.some(log => isClosureSubmissionAction((log && log.action) || ''));
 }
 
 function hasUnreviewedClosureSubmission(finding) {
   if (!hasClosureSubmission(finding)) return false;
   if (!hasReviewDecision(finding)) return true;
-  const logs = Array.isArray(finding && finding.activityLog) ? finding.activityLog : [];
-  let submitIndex = -1;
-  let decisionIndex = -1;
-  logs.forEach((log, index) => {
-    const action = String((log && log.action) || '');
-    if (/(closure submitted|submitted for review)/i.test(action)) submitIndex = index;
-    if (/closure (accepted|rejected)/i.test(action)) decisionIndex = index;
-  });
-  return submitIndex > -1 && submitIndex > decisionIndex;
+  const submitted = closureSubmissionSignal(finding);
+  const reviewed = reviewDecisionSignal(finding);
+  if (!submitted.exists) return false;
+  if (!reviewed.exists) return false;
+  if (submitted.time && reviewed.time) return submitted.time > reviewed.time;
+  if (submitted.index > -1 && reviewed.index > -1) return submitted.index > reviewed.index;
+  return false;
 }
 
 function isPendingReviewFinding(finding) {
@@ -338,20 +410,24 @@ function normalizeFindingSyncState(finding) {
   let capaStatus = String(item.capaStatus || '').toLowerCase();
   const decision = String(item.decision || '').toLowerCase();
   const pendingSignal = status === 'pending-closure' || capaStatus === 'submitted';
+  const unreviewedSubmission = hasUnreviewedClosureSubmission(item);
 
   if (pendingSignal && (decision === 'accept' || decision === 'reject')) {
-    item.decision = null;
-    item.decisionComments = '';
-    item.decisionDate = null;
-    if (decision === 'accept') {
+    if (unreviewedSubmission) {
+      item.decision = null;
+      item.decisionComments = '';
+      item.decisionDate = null;
       item.auditClosureDate = null;
       item.closedAt = null;
+    } else {
+      item.status = decision === 'accept' ? 'closed' : 'open';
+      item.capaStatus = decision === 'accept' ? 'closed' : 'open';
     }
     status = String(item.status || '').toLowerCase();
     capaStatus = String(item.capaStatus || '').toLowerCase();
   }
 
-  if (status === 'delayed' && capaStatus === 'delayed' && hasUnreviewedClosureSubmission(item)) {
+  if ((status === 'delayed' || capaStatus === 'delayed') && unreviewedSubmission) {
     item.status = 'pending-closure';
     item.capaStatus = 'submitted';
     if (decision === 'accept' || decision === 'reject') {
@@ -366,11 +442,55 @@ function normalizeFindingSyncState(finding) {
   return item;
 }
 
+function workflowMeaningfulTime(finding) {
+  return Math.max(
+    findingUpdatedTime(finding),
+    closureSubmissionSignal(finding).time || 0,
+    reviewDecisionSignal(finding).time || 0
+  );
+}
+
+function mergeActivityLogs(a, b) {
+  const rows = []
+    .concat(Array.isArray(a && a.activityLog) ? a.activityLog : [])
+    .concat(Array.isArray(b && b.activityLog) ? b.activityLog : []);
+  const seen = new Set();
+  return rows.filter(log => {
+    if (!log || typeof log !== 'object') return false;
+    const key = [log.user || '', log.action || '', log.ts || ''].join('|');
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(-200);
+}
+
+function withMergedActivityLogs(selected, other) {
+  if (!selected || !other) return selected;
+  const logs = mergeActivityLogs(selected, other);
+  return logs.length === (Array.isArray(selected.activityLog) ? selected.activityLog.length : 0)
+    ? selected
+    : Object.assign({}, selected, { activityLog: logs });
+}
+
 function chooseFindingForSync(current, incoming) {
   current = normalizeFindingSyncState(current);
   incoming = normalizeFindingSyncState(incoming);
   if (!current) return incoming;
   if (!incoming) return current;
+
+  const currentPending = isPendingReviewFinding(current);
+  const incomingPending = isPendingReviewFinding(incoming);
+  if (currentPending || incomingPending) {
+    const currentReviewed = hasReviewDecision(current) || String(current.status || '').toLowerCase() === 'closed';
+    const incomingReviewed = hasReviewDecision(incoming) || String(incoming.status || '').toLowerCase() === 'closed';
+    if (currentPending && !incomingPending && !incomingReviewed) return withMergedActivityLogs(current, incoming);
+    if (incomingPending && !currentPending && !currentReviewed) return withMergedActivityLogs(incoming, current);
+    if (currentPending && incomingPending) {
+      const currentTime = workflowMeaningfulTime(current);
+      const incomingTime = workflowMeaningfulTime(incoming);
+      return withMergedActivityLogs(incomingTime > currentTime ? incoming : current, incomingTime > currentTime ? current : incoming);
+    }
+  }
 
   const currentTime = findingUpdatedTime(current);
   const incomingTime = findingUpdatedTime(incoming);
@@ -589,6 +709,12 @@ app.post('/api/sync/bulk', wrapAsync(async (req, res) => {
 
   const collection = await getCollection();
   const now = new Date();
+  for (const key of keys) {
+    if (key === 'ap_finds') {
+      const current = await collection.findOne({ key });
+      items[key] = mergeFindingsForSync(current && current.value, items[key]);
+    }
+  }
   await collection.bulkWrite(keys.map(key => ({
     updateOne: {
       filter: { key },
