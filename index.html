@@ -630,7 +630,7 @@ var API_BASE='';
 var _apiReady=false;
 
 // Keys to sync with MongoDB through the backend API (shared team data)
-var SYNC_KEYS=['ap_users','ap_depts','ap_auds','ap_cps','ap_finds','ap_learns','ap_completed_audits','ap_planned_audits','ap_import_logs','ap_capa_due','ap_secs','ap_notifs','ap_stds','ap_permissions','ap_email_master','ap_email_templates','ap_email_logs','ap_required_cc_emails','ap_root_causes','ap_media_library','ap_escalation_matrix'];
+var SYNC_KEYS=['ap_users','ap_depts','ap_auds','ap_cps','ap_finds','ap_learns','ap_completed_audits','ap_planned_audits','ap_import_logs','ap_capa_due','ap_secs','ap_notifs','ap_stds','ap_permissions','ap_email_master','ap_email_templates','ap_email_logs','ap_required_cc_emails','ap_root_causes','ap_media_library','ap_escalation_matrix','ap_audit_drafts'];
 var _myWrites={};
 var _syncStatus='connecting';
 
@@ -864,6 +864,44 @@ function _mergeFindingsForSync(local,remote){
   local.forEach(function(f){var k=_findingSyncKey(f);if(k&&!seen[k])out.push(f);});
   return out;
 }
+function _auditDraftSyncKey(row){
+  return String((row&&row.userKey)||(row&&row.loginId)||(row&&row.id)||'').trim();
+}
+function _auditDraftSyncTime(row){
+  var t=Date.parse((row&&row.updatedAt)||(row&&row.at)||'');
+  return isNaN(t)?0:t;
+}
+function _auditDraftCompleteness(row){
+  if(!row||typeof row!=='object')return 0;
+  var score=row.audit?1:0;
+  var session=row.session&&typeof row.session==='object'?row.session:null;
+  if(session){
+    score+=1;
+    score+=Object.keys(session.answers||{}).length;
+    score+=Object.keys(session.findings||{}).length*2;
+    score+=Object.keys(session.notes||{}).length;
+    if(String(session.genNotes||'').trim())score+=1;
+  }
+  return score;
+}
+function _chooseAuditDraft(current,incoming){
+  if(!current)return incoming;
+  var ct=_auditDraftSyncTime(current),it=_auditDraftSyncTime(incoming);
+  if(it>ct)return incoming;
+  if(it<ct)return current;
+  return _auditDraftCompleteness(incoming)>=_auditDraftCompleteness(current)?incoming:current;
+}
+function _mergeAuditDraftsForSync(local,remote){
+  var rows=[].concat(Array.isArray(local)?local:[],Array.isArray(remote)?remote:[]);
+  var byKey={};
+  rows.forEach(function(row){
+    var key=_auditDraftSyncKey(row);if(!key)return;
+    byKey[key]=_chooseAuditDraft(byKey[key],row);
+  });
+  return Object.keys(byKey).map(function(k){return byKey[k];})
+    .sort(function(a,b){return _auditDraftSyncTime(b)-_auditDraftSyncTime(a);})
+    .slice(0,100);
+}
 
 function _refreshAfterSync(k){
   if(typeof APP==='undefined'||typeof renderPage!=='function')return;
@@ -890,6 +928,7 @@ function _refreshAfterSync(k){
     ap_required_cc_emails:['masterdata'],
     ap_root_causes:['masterdata','execution'],
     ap_media_library:['media'],
+    ap_audit_drafts:['planning','execution'],
     ap_permissions:['adminpanel']
   };
   var pages=relevantPages[k]||[];
@@ -897,6 +936,10 @@ function _refreshAfterSync(k){
     // Only mark findings as delayed (status update) — do NOT send emails from sync poll.
     // Emails are sent only by the scheduled background check, not on every 15s poll.
     processOverdueFindings({sendEmail:false,source:'sync'});
+  }
+  if(k==='ap_audit_drafts'&&typeof restoreCurrentAuditDraft==='function'){
+    restoreCurrentAuditDraft();
+    var rcv=el('rcv');if(rcv&&APP.session)rcv.classList.remove('hidden');
   }
   if(pages.indexOf(page)>-1)renderPage(page);
   if(typeof buildNav==='function')buildNav();
@@ -1087,9 +1130,53 @@ const APP={
 
 // Audit session state (in-memory + persisted)
 let AS={answers:{},findings:{},notes:{},genNotes:''};
+var AUDIT_DRAFTS_KEY='ap_audit_drafts';
 
-function saveAS(){APP.session={...AS,at:new Date().toISOString()};}
-function loadAS(){const s=APP.session;if(s){AS={answers:s.answers||{},findings:s.findings||{},notes:s.notes||{},genNotes:s.genNotes||''};}}
+function auditDraftUserKey(){
+  var u=APP.currentUser;
+  return u?String(u.id||u.loginId||u.name||'').trim():'';
+}
+function auditDraftRows(){
+  var rows=LS.get(AUDIT_DRAFTS_KEY,[]);
+  return Array.isArray(rows)?rows.filter(function(row){return row&&typeof row==='object';}):[];
+}
+function currentAuditDraft(){
+  var key=auditDraftUserKey();if(!key)return null;
+  return auditDraftRows().find(function(row){return row.userKey===key&&row.status!=='submitted';})||null;
+}
+function saveCurrentAuditDraft(){
+  var key=auditDraftUserKey();if(!key)return;
+  var audit=LS.get('ap_active_audit',null);
+  var session=APP.session;
+  var rows=auditDraftRows().filter(function(row){return row.userKey!==key;});
+  if(audit||session){
+    var u=APP.currentUser||{};
+    rows.unshift({
+      id:'draft_'+key.replace(/[^A-Za-z0-9_-]+/g,'_'),
+      userKey:key,
+      loginId:u.loginId||'',
+      userName:u.name||'',
+      audit:audit||null,
+      session:session||null,
+      status:'draft',
+      updatedAt:new Date().toISOString()
+    });
+  }
+  LS.set(AUDIT_DRAFTS_KEY,rows.slice(0,100));
+}
+function clearCurrentAuditDraft(){
+  var key=auditDraftUserKey();if(!key)return;
+  var rows=auditDraftRows().filter(function(row){return row.userKey!==key;});
+  LS.set(AUDIT_DRAFTS_KEY,rows);
+}
+function restoreCurrentAuditDraft(){
+  var draft=currentAuditDraft();if(!draft)return false;
+  if(draft.audit&&!LS.get('ap_active_audit',null))LS.set('ap_active_audit',draft.audit);
+  if(draft.session&&!APP.session)APP.session=draft.session;
+  return !!(draft.audit||draft.session);
+}
+function saveAS(){APP.session={...AS,at:new Date().toISOString()};saveCurrentAuditDraft();}
+function loadAS(){if(!APP.session)restoreCurrentAuditDraft();const s=APP.session;if(s){AS={answers:s.answers||{},findings:s.findings||{},notes:s.notes||{},genNotes:s.genNotes||''};}}
 // ── MONGODB API SYNC ──
 var _syncInitDone=false;
 function initApiSync(){
@@ -1114,6 +1201,11 @@ function initApiSync(){
           shouldPushMerged=JSON.stringify(mergedFindings)!==JSON.stringify(remote);
           remote=mergedFindings;
         }
+        if(k==='ap_audit_drafts'){
+          var mergedDrafts=_mergeAuditDraftsForSync(local,remote);
+          shouldPushMerged=JSON.stringify(mergedDrafts)!==JSON.stringify(remote);
+          remote=mergedDrafts;
+        }
         if(k==='ap_email_logs'){
           var mergedLogs=_mergeEmailLogs(local,remote);
           if(JSON.stringify(mergedLogs)!==JSON.stringify(local||[])){
@@ -1134,6 +1226,10 @@ function initApiSync(){
       }
     });
 
+    if(typeof restoreCurrentAuditDraft==='function'&&restoreCurrentAuditDraft()){
+      var rcv=el('rcv');if(rcv)rcv.classList.remove('hidden');
+      updated=true;
+    }
     if(typeof repairCompletedAuditScores==='function')repairCompletedAuditScores();
     // Status update only on sync — email scheduler handles actual sending
     if(typeof processOverdueFindings==='function')processOverdueFindings({sendEmail:false,source:'initial-sync'});
@@ -1170,6 +1266,15 @@ function pollApiSync(){
           remote=mergedFindings;
           remoteText=mergedText;
           _apiFetch('/api/sync/ap_finds',{method:'PUT',body:JSON.stringify({value:remote,by:(APP.currentUser&&APP.currentUser.loginId)||'browser-merge'})}).catch(function(e){console.warn('Findings merge sync:',e.message);});
+        }
+      }
+      if(k==='ap_audit_drafts'){
+        var mergedDrafts=_mergeAuditDraftsForSync(local,remote);
+        var draftText=JSON.stringify(mergedDrafts);
+        if(draftText!==remoteText){
+          remote=mergedDrafts;
+          remoteText=draftText;
+          _apiFetch('/api/sync/ap_audit_drafts',{method:'PUT',body:JSON.stringify({value:remote,by:(APP.currentUser&&APP.currentUser.loginId)||'draft-merge'})}).catch(function(e){console.warn('Draft merge sync:',e.message);});
         }
       }
       if(k==='ap_email_logs'){
@@ -2025,7 +2130,7 @@ window.addEventListener('hashchange',()=>{const h=location.hash.slice(1);if(h&&A
 document.addEventListener('DOMContentLoaded',()=>{
   // v4.2 fresh start - auto-clear old v4.1 data on first load
   if(!localStorage.getItem('ap_v45_prod')){
-    ['ap_users','ap_depts','ap_auds','ap_cps','ap_finds','ap_notifs','ap_secs','ap_learns','ap_sess','ap_cu','ap_stds','ap_permissions','imp_cnt','imp_errs','imp_last','imp_log','ap_completed_audits','ap_planned_audits','ap_import_logs','ap_active_audit','ap_v45_prod'].forEach(k=>localStorage.removeItem(k));
+    ['ap_users','ap_depts','ap_auds','ap_cps','ap_finds','ap_notifs','ap_secs','ap_learns','ap_sess','ap_cu','ap_stds','ap_permissions','imp_cnt','imp_errs','imp_last','imp_log','ap_completed_audits','ap_planned_audits','ap_import_logs','ap_active_audit','ap_audit_drafts','ap_v45_prod'].forEach(k=>localStorage.removeItem(k));
     localStorage.setItem('ap_v45_prod','1');
   }
   // Set logo
@@ -2089,6 +2194,7 @@ function initApp(){
   av.textContent=u.avatar||u.name.substring(0,2).toUpperCase();
   av.style.background=ROLE_COLORS[u.role]||'var(--brand)';
   buildNav();
+  restoreCurrentAuditDraft();
   if(APP.session)el('rcv').classList.remove('hidden');
   updateNotifBadge();
   const hashPage=location.hash.slice(1);const startPage=hashPage&&PERMS[u.role]?.[hashPage]?hashPage:(PERMS[u.role]?.dashboard?'dashboard':'findings');navigate(startPage);
@@ -5459,7 +5565,10 @@ const STDLIB={
 // ── ACTIVE AUDIT STORAGE ──────────────────────────────────────────
 const AUDIT_KEY='ap_active_audit';
 function getActiveAudit(){return LS.get(AUDIT_KEY,null);}
-function setActiveAudit(a){if(a)LS.set(AUDIT_KEY,a);else LS.del(AUDIT_KEY);}
+function setActiveAudit(a){
+  if(a){LS.set(AUDIT_KEY,a);saveCurrentAuditDraft();}
+  else{LS.del(AUDIT_KEY);APP.session=null;clearCurrentAuditDraft();}
+}
 
 // ── DYNAMIC CHECKLIST BUILDER ─────────────────────────────────────
 function buildChecklist(deptCode,standards){

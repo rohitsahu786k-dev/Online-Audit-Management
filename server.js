@@ -40,7 +40,8 @@ const SYNC_KEYS = [
   'ap_required_cc_emails',
   'ap_root_causes',
   'ap_media_library',
-  'ap_escalation_matrix'
+  'ap_escalation_matrix',
+  'ap_audit_drafts'
 ];
 const PASSWORD_RESET_KEY = '_password_reset_otps';
 const EMAIL_SEND_LOCK_PREFIX = '_email_send_lock_';
@@ -534,6 +535,56 @@ function mergeFindingsForSync(currentValue, incomingValue) {
   return merged;
 }
 
+function auditDraftKey(row) {
+  if (!row || typeof row !== 'object') return '';
+  return String(row.userKey || row.loginId || row.id || '').trim();
+}
+
+function auditDraftTime(row) {
+  if (!row || typeof row !== 'object') return 0;
+  const time = Date.parse(row.updatedAt || row.at || '');
+  return Number.isFinite(time) ? time : 0;
+}
+
+function auditDraftCompleteness(row) {
+  if (!row || typeof row !== 'object') return 0;
+  let score = row.audit ? 1 : 0;
+  const session = row.session && typeof row.session === 'object' ? row.session : null;
+  if (session) {
+    score += 1;
+    score += Object.keys(session.answers || {}).length;
+    score += Object.keys(session.findings || {}).length * 2;
+    score += Object.keys(session.notes || {}).length;
+    if (String(session.genNotes || '').trim()) score += 1;
+  }
+  return score;
+}
+
+function chooseAuditDraft(current, incoming) {
+  if (!current) return incoming;
+  const currentTime = auditDraftTime(current);
+  const incomingTime = auditDraftTime(incoming);
+  if (incomingTime > currentTime) return incoming;
+  if (incomingTime < currentTime) return current;
+  return auditDraftCompleteness(incoming) >= auditDraftCompleteness(current) ? incoming : current;
+}
+
+function mergeAuditDraftsForSync(currentValue, incomingValue) {
+  if (!Array.isArray(incomingValue)) return Array.isArray(currentValue) ? currentValue : [];
+  const byKey = new Map();
+  []
+    .concat(Array.isArray(currentValue) ? currentValue : [], incomingValue)
+    .forEach(row => {
+      const key = auditDraftKey(row);
+      if (!key) return;
+      const existing = byKey.get(key);
+      byKey.set(key, chooseAuditDraft(existing, row));
+    });
+  return Array.from(byKey.values())
+    .sort((a, b) => auditDraftTime(b) - auditDraftTime(a))
+    .slice(0, 100);
+}
+
 function cleanIdentity(input) {
   return String(input || '').trim().toLowerCase();
 }
@@ -686,6 +737,11 @@ app.put('/api/sync/:key', wrapAsync(async (req, res) => {
     incomingValue = mergeFindingsForSync(current && current.value, incomingValue);
   }
 
+  if (key === 'ap_audit_drafts') {
+    const current = await collection.findOne({ key });
+    incomingValue = mergeAuditDraftsForSync(current && current.value, incomingValue);
+  }
+
   await collection.updateOne(
     { key },
     {
@@ -713,6 +769,10 @@ app.post('/api/sync/bulk', wrapAsync(async (req, res) => {
     if (key === 'ap_finds') {
       const current = await collection.findOne({ key });
       items[key] = mergeFindingsForSync(current && current.value, items[key]);
+    }
+    if (key === 'ap_audit_drafts') {
+      const current = await collection.findOne({ key });
+      items[key] = mergeAuditDraftsForSync(current && current.value, items[key]);
     }
   }
   await collection.bulkWrite(keys.map(key => ({
