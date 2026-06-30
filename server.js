@@ -41,7 +41,8 @@ const SYNC_KEYS = [
   'ap_root_causes',
   'ap_media_library',
   'ap_escalation_matrix',
-  'ap_audit_drafts'
+  'ap_audit_drafts',
+  'ap_local_storage_backup'
 ];
 const PASSWORD_RESET_KEY = '_password_reset_otps';
 const EMAIL_SEND_LOCK_PREFIX = '_email_send_lock_';
@@ -486,13 +487,21 @@ function mergeActivityLogs(a, b) {
     .concat(Array.isArray(a && a.activityLog) ? a.activityLog : [])
     .concat(Array.isArray(b && b.activityLog) ? b.activityLog : []);
   const seen = new Set();
-  return rows.filter(log => {
+  return rows.map((log, index) => ({
+    log,
+    index,
+    time: parseAuditTimestamp((log && (log.ts || log.at || log.updatedAt)) || '')
+  })).filter(row => {
+    const log = row.log;
     if (!log || typeof log !== 'object') return false;
     const key = [log.user || '', log.action || '', log.ts || ''].join('|');
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
-  }).slice(-200);
+  })
+    .sort((a, b) => (a.time - b.time) || (a.index - b.index))
+    .slice(-200)
+    .map(row => row.log);
 }
 
 function withMergedActivityLogs(selected, other) {
@@ -826,13 +835,17 @@ app.post('/api/sync/bulk', wrapAsync(async (req, res) => {
   const collection = await getCollection();
   const now = new Date();
   for (const key of keys) {
+    const current = key === 'ap_finds' || key === 'ap_audit_drafts' || key === 'ap_email_logs'
+      ? await collection.findOne({ key })
+      : null;
     if (key === 'ap_finds') {
-      const current = await collection.findOne({ key });
       items[key] = mergeFindingsForSync(current && current.value, items[key]);
     }
     if (key === 'ap_audit_drafts') {
-      const current = await collection.findOne({ key });
       items[key] = mergeAuditDraftsForSync(current && current.value, items[key]);
+    }
+    if (key === 'ap_email_logs') {
+      items[key] = mergeEmailLogs(current && current.value, items[key], current && current.clearedAt);
     }
   }
   await collection.bulkWrite(keys.map(key => ({

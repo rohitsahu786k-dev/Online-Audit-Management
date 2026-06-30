@@ -630,7 +630,10 @@ var API_BASE='';
 var _apiReady=false;
 
 // Keys to sync with MongoDB through the backend API (shared team data)
-var SYNC_KEYS=['ap_users','ap_depts','ap_auds','ap_cps','ap_finds','ap_learns','ap_completed_audits','ap_planned_audits','ap_import_logs','ap_capa_due','ap_secs','ap_notifs','ap_stds','ap_permissions','ap_email_master','ap_email_templates','ap_email_logs','ap_required_cc_emails','ap_root_causes','ap_media_library','ap_escalation_matrix','ap_audit_drafts'];
+var SYNC_KEYS=['ap_users','ap_depts','ap_auds','ap_cps','ap_finds','ap_learns','ap_completed_audits','ap_planned_audits','ap_import_logs','ap_capa_due','ap_secs','ap_notifs','ap_stds','ap_permissions','ap_email_master','ap_email_templates','ap_email_logs','ap_required_cc_emails','ap_root_causes','ap_media_library','ap_escalation_matrix','ap_audit_drafts','ap_local_storage_backup'];
+var LOCAL_STORAGE_BACKUP_KEY='ap_local_storage_backup';
+var PENDING_SYNC_KEY='ap_pending_sync_queue';
+var LOCAL_SYNC_EXCLUDE_KEYS={ap_rem_p:1,ap_local_storage_backup:1,ap_pending_sync_queue:1};
 var _myWrites={};
 var _syncStatus='connecting';
 
@@ -656,6 +659,127 @@ function _apiFetch(path,opts){
     });
   });
 }
+
+function _localSyncExists(k){
+  try{return localStorage.getItem(k)!==null;}catch(e){return false;}
+}
+function _syncValueHasData(v){
+  if(v===null||v===undefined)return false;
+  if(Array.isArray(v))return v.length>0;
+  if(typeof v==='object')return Object.keys(v).length>0;
+  return String(v).trim()!=='';
+}
+function _safeLocalStorageSnapshot(){
+  var data={};
+  try{
+    Object.keys(localStorage).forEach(function(k){
+      if(LOCAL_SYNC_EXCLUDE_KEYS[k])return;
+      if(!(k.indexOf('ap_')===0||k.indexOf('imp_')===0))return;
+      data[k]=LS.get(k,localStorage.getItem(k));
+    });
+  }catch(e){}
+  return {
+    updatedAt:new Date().toISOString(),
+    updatedBy:(typeof APP!=='undefined'&&APP.currentUser&&APP.currentUser.loginId)||'browser',
+    keys:Object.keys(data).sort(),
+    data:data
+  };
+}
+function _collectLocalSyncItems(keys){
+  var items={};
+  (keys||SYNC_KEYS).forEach(function(k){
+    if(k===LOCAL_STORAGE_BACKUP_KEY){items[k]=_safeLocalStorageSnapshot();return;}
+    if(!_localSyncExists(k))return;
+    var value=_sanitizeSyncData(k,LS.get(k,null));
+    items[k]=_stripPhotos(k,value);
+  });
+  return items;
+}
+function _pendingSyncItems(){
+  try{
+    var raw=localStorage.getItem(PENDING_SYNC_KEY);
+    var parsed=raw?JSON.parse(raw):{};
+    return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:{};
+  }catch(e){return {};}
+}
+function _savePendingSyncItems(items){
+  try{
+    var keys=Object.keys(items||{});
+    if(keys.length)localStorage.setItem(PENDING_SYNC_KEY,JSON.stringify(items));
+    else localStorage.removeItem(PENDING_SYNC_KEY);
+  }catch(e){}
+}
+function _queueSyncItem(k,v){
+  if(SYNC_KEYS.indexOf(k)<0||k===LOCAL_STORAGE_BACKUP_KEY)return;
+  var items=_pendingSyncItems();
+  items[k]=_stripPhotos(k,_sanitizeSyncData(k,v));
+  _savePendingSyncItems(items);
+}
+function _mergePendingSyncItems(items){
+  var pending=_pendingSyncItems();
+  Object.keys(pending).forEach(function(k){
+    if(SYNC_KEYS.indexOf(k)>-1)items[k]=pending[k];
+  });
+  return items;
+}
+function _writeSyncKeyNow(k,v,by){
+  if(!_apiReady||SYNC_KEYS.indexOf(k)<0)return Promise.resolve({queued:true});
+  var clean=_stripPhotos(k,_sanitizeSyncData(k,v));
+  _myWrites[k]=Date.now();
+  return _apiFetch('/api/sync/'+encodeURIComponent(k),{
+    method:'PUT',
+    body:JSON.stringify({value:clean,by:by||(typeof APP!=='undefined'&&APP._cu?APP._cu.loginId:'browser')})
+  }).then(function(){
+    _syncStatus='synced';_updateSyncUI();
+    return {ok:true};
+  }).catch(function(e){
+    _queueSyncItem(k,v);
+    console.warn('Sync write queued:',e.message);
+    _syncStatus='error';_updateSyncUI();
+    return {queued:true,error:e.message};
+  });
+}
+function flushPendingLocalSync(reason){
+  if(!_apiReady)return Promise.resolve({ok:false,count:0,error:'api-not-ready'});
+  var items=_mergePendingSyncItems({});
+  items[LOCAL_STORAGE_BACKUP_KEY]=_safeLocalStorageSnapshot();
+  var keys=Object.keys(items);
+  if(!keys.length)return Promise.resolve({ok:true,count:0});
+  _syncStatus='syncing';_updateSyncUI();
+  return _apiFetch('/api/sync/bulk',{
+    method:'POST',
+    body:JSON.stringify({items:items,by:(APP.currentUser&&APP.currentUser.loginId)||reason||'browser-pending-flush'})
+  }).then(function(res){
+    _savePendingSyncItems({});
+    _syncStatus='synced';_updateSyncUI();
+    return res;
+  }).catch(function(e){
+    console.warn('Pending local sync:',e.message);
+    _syncStatus='error';_updateSyncUI();
+    throw e;
+  });
+}
+function pushLocalStorageToMongo(reason){
+  if(!_apiReady)return Promise.resolve({ok:false,count:0,error:'api-not-ready'});
+  var items=_collectLocalSyncItems(SYNC_KEYS);
+  _mergePendingSyncItems(items);
+  var keys=Object.keys(items);
+  if(!keys.length)return Promise.resolve({ok:true,count:0});
+  _syncStatus='syncing';_updateSyncUI();
+  return _apiFetch('/api/sync/bulk',{
+    method:'POST',
+    body:JSON.stringify({items:items,by:(APP.currentUser&&APP.currentUser.loginId)||reason||'browser-local-push'})
+  }).then(function(res){
+    _savePendingSyncItems({});
+    _syncStatus='synced';_updateSyncUI();
+    return res;
+  }).catch(function(e){
+    console.warn('Local push sync:',e.message);
+    _syncStatus='error';_updateSyncUI();
+    throw e;
+  });
+}
+window.pushLocalStorageToMongo=pushLocalStorageToMongo;
 
 function _sanitizeSyncData(k,data){
   if(k==='ap_finds'&&Array.isArray(data)){
@@ -827,13 +951,14 @@ function _workflowMeaningfulTime(f){
 function _mergeFindingLogs(a,b){
   var rows=[].concat(Array.isArray(a&&a.activityLog)?a.activityLog:[],Array.isArray(b&&b.activityLog)?b.activityLog:[]);
   var seen={};
-  return rows.filter(function(log){
+  return rows.map(function(log,idx){return{log:log,idx:idx,time:_parseAuditTimestamp((log&&log.ts)||(log&&log.at)||(log&&log.updatedAt)||'')||0};}).filter(function(row){
+    var log=row.log;
     if(!log||typeof log!=='object')return false;
     var key=[log.user||'',log.action||'',log.ts||''].join('|');
     if(seen[key])return false;
     seen[key]=1;
     return true;
-  }).slice(-200);
+  }).sort(function(a,b){return (a.time-b.time)||(a.idx-b.idx);}).slice(-200).map(function(row){return row.log;});
 }
 function _withMergedFindingLogs(selected,other){
   if(!selected||!other)return selected;
@@ -986,18 +1111,15 @@ const LS={
   set(k,v){
     try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}
     // Sync to MongoDB backend
-    if(_apiReady&&SYNC_KEYS.indexOf(k)>-1){
-      _myWrites[k]=Date.now();
-      var clean=_stripPhotos(k,v);
-      _apiFetch('/api/sync/'+encodeURIComponent(k),{
-        method:'PUT',
-        body:JSON.stringify({value:clean,by:(typeof APP!=='undefined'&&APP._cu)?APP._cu.loginId:'browser'})
-      }).then(function(){
-        _syncStatus='synced';_updateSyncUI();
-      }).catch(function(e){
-        console.warn('Sync write:',e.message);
-        _syncStatus='error';_updateSyncUI();
-      });
+    if(SYNC_KEYS.indexOf(k)>-1){
+      if(_apiReady){
+        _writeSyncKeyNow(k,v,(typeof APP!=='undefined'&&APP._cu)?APP._cu.loginId:'browser');
+        clearTimeout(window._localBackupSyncTimer);
+        window._localBackupSyncTimer=setTimeout(function(){flushPendingLocalSync('local-backup').catch(function(){});},800);
+      }else{
+        _queueSyncItem(k,v);
+        _syncStatus='connecting';_updateSyncUI();
+      }
     }
   },
   del(k){
@@ -1226,11 +1348,17 @@ function initApiSync(){
   }).then(function(payload){
     var cloud=payload.data||{};
     var updated=false;
+    var localPushItems={};
 
     SYNC_KEYS.forEach(function(k){
+      if(k===LOCAL_STORAGE_BACKUP_KEY){
+        localPushItems[k]=_safeLocalStorageSnapshot();
+        return;
+      }
+      var hasLocal=_localSyncExists(k);
+      var local=hasLocal?LS.get(k,null):null;
       if(cloud[k]&&Object.prototype.hasOwnProperty.call(cloud[k],'value')){
         var remote=_sanitizeSyncData(k,cloud[k].value);
-        var local=LS.get(k,null);
         var shouldPushMerged=false;
         if(k==='ap_finds'){
           var mergedFindings=_mergeFindingsForSync(local,remote);
@@ -1244,23 +1372,44 @@ function initApiSync(){
         }
         if(k==='ap_email_logs'){
           var mergedLogs=_mergeEmailLogs(local,remote);
+          if(JSON.stringify(mergedLogs)!==JSON.stringify(remote||[])){
+            localPushItems[k]=_stripPhotos(k,mergedLogs);
+          }
           if(JSON.stringify(mergedLogs)!==JSON.stringify(local||[])){
             localStorage.setItem(k,JSON.stringify(mergedLogs));
             updated=true;
           }
           return;
         }
+        if(hasLocal&&_syncValueHasData(local)&&!_syncValueHasData(remote)){
+          remote=_sanitizeSyncData(k,local);
+          shouldPushMerged=true;
+        }
         if(remote!==null&&remote!==undefined&&JSON.stringify(remote)!==JSON.stringify(local)){
           localStorage.setItem(k,JSON.stringify(remote));
           updated=true;
         }
         if(shouldPushMerged){
-          _apiFetch('/api/sync/ap_finds',{method:'PUT',body:JSON.stringify({value:remote,by:(APP.currentUser&&APP.currentUser.loginId)||'browser-merge'})}).catch(function(e){console.warn('Findings merge sync:',e.message);});
+          localPushItems[k]=_stripPhotos(k,remote);
         }
       }else{
-        localStorage.removeItem(k);
+        if(hasLocal){
+          var localValue=_sanitizeSyncData(k,local);
+          localPushItems[k]=_stripPhotos(k,localValue);
+          if(JSON.stringify(localValue)!==JSON.stringify(local)){
+            localStorage.setItem(k,JSON.stringify(localValue));
+            updated=true;
+          }
+        }else{
+          localStorage.removeItem(k);
+        }
       }
     });
+
+    if(Object.keys(localPushItems).length){
+      _mergePendingSyncItems(localPushItems);
+      _apiFetch('/api/sync/bulk',{method:'POST',body:JSON.stringify({items:localPushItems,by:(APP.currentUser&&APP.currentUser.loginId)||'browser-local-merge'})}).then(function(){_savePendingSyncItems({});}).catch(function(e){console.warn('Initial local push sync:',e.message);});
+    }
 
     if(typeof restoreCurrentAuditDraft==='function'&&restoreCurrentAuditDraft()){
       var rcv=el('rcv');if(rcv)rcv.classList.remove('hidden');
@@ -1290,6 +1439,7 @@ function pollApiSync(){
     var cloud=payload.data||{};
     Object.keys(cloud).forEach(function(k){
       if(SYNC_KEYS.indexOf(k)<0||!cloud[k])return;
+      if(k===LOCAL_STORAGE_BACKUP_KEY)return;
       if(_myWrites[k]&&Date.now()-_myWrites[k]<5000){delete _myWrites[k];return;}
       var remote=_sanitizeSyncData(k,cloud[k].value);
       var local=LS.get(k,null);
@@ -1327,6 +1477,7 @@ function pollApiSync(){
         _refreshAfterSync(k);
       }
     });
+    flushPendingLocalSync('poll').catch(function(){});
     _syncStatus='synced';_updateSyncUI();
   }).catch(function(err){
     console.warn('Poll sync failed:',err.message);
@@ -1561,6 +1712,7 @@ function clearDateFilter(){
 }
 
 function sanitize(s){if(!s)return '';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;');}
+function jsArg(v){return JSON.stringify(String(v==null?'':v));}
 
 function _uniqueFindingId(f,idx,seen){
   var base=String((f&&f.ref)||(f&&f.id)||('finding_'+idx)).trim().replace(/[^A-Za-z0-9]+/g,'_').replace(/^_+|_+$/g,'')||('finding_'+idx);
@@ -1634,14 +1786,35 @@ function findCapa(key,list){
     F.find(function(x){return String(x.id||'')===text;})||
     F.find(function(x){return capaKey(x)===String(key||'');})||null;
 }
+function canAccessCapaFinding(f,role){
+  var u=APP.currentUser||{};
+  role=role||u.role;
+  if(!f)return false;
+  if(role==='spoc')return String(f.dept||'')===String(u.dept||'');
+  if(role==='manager')return managerDeptCodes(u).indexOf(f.dept)>-1;
+  return role==='admin'||role==='auditor'||role==='viewer';
+}
 function canReviewCapaStatus(role){
   role=role||(APP.currentUser&&APP.currentUser.role);
   return role==='auditor'||role==='admin';
 }
+function canSubmitCapaClosure(role){
+  role=role||(APP.currentUser&&APP.currentUser.role);
+  return role==='spoc'||role==='admin';
+}
+function canEditCapaStatus(role){
+  role=role||(APP.currentUser&&APP.currentUser.role);
+  return role==='admin'||role==='auditor'||role==='spoc';
+}
+function canEditCapaDue(role){
+  role=role||(APP.currentUser&&APP.currentUser.role);
+  return role==='admin'||role==='auditor';
+}
 function capaStatusOptionsForRole(f,role){
   var ws=findingWorkflowStatus(f);
   var reviewer=canReviewCapaStatus(role);
-  var allowed=reviewer?['open','in-progress','closed']:['open','in-progress','pending-closure'];
+  var submitter=canSubmitCapaClosure(role);
+  var allowed=reviewer?['open','in-progress','closed']:(submitter?['open','in-progress','pending-closure']:[]);
   var out=[];
   if(allowed.indexOf(ws)<0&&ws)out.push({value:ws,label:STAT_LABEL[ws]||ws,disabled:true});
   allowed.forEach(function(s){out.push({value:s,label:STAT_LABEL[s]||s,disabled:false});});
@@ -1649,27 +1822,83 @@ function capaStatusOptionsForRole(f,role){
 }
 function renderCapaStatusSelect(key,f,role){
   var ws=findingWorkflowStatus(f);
-  return `<select onchange="updateCapaStatus('${key}',this.value,this)">`+capaStatusOptionsForRole(f,role).map(function(opt){
+  return `<select ${canEditCapaStatus(role)?'':'disabled'} onchange="updateCapaStatus(${jsArg(key)},this.value,this)">`+capaStatusOptionsForRole(f,role).map(function(opt){
     return '<option value="'+opt.value+'" '+(ws===opt.value?'selected':'')+' '+(opt.disabled?'disabled':'')+'>'+opt.label+'</option>';
   }).join('')+'</select>';
 }
 function canSetCapaStatus(status,role){
   if(status==='delayed')return false;
-  if(canReviewCapaStatus(role))return ['open','in-progress','closed'].indexOf(status)>-1;
-  return ['open','in-progress','pending-closure'].indexOf(status)>-1;
+  if(!canEditCapaStatus(role))return false;
+  if(status==='pending-closure')return canSubmitCapaClosure(role);
+  if(status==='closed')return canReviewCapaStatus(role);
+  return ['open','in-progress'].indexOf(status)>-1;
+}
+function capaSortRank(f){
+  var ws=findingWorkflowStatus(f);
+  if(ws==='pending-closure')return 0;
+  if(ws==='delayed')return 1;
+  if(ws==='open')return 2;
+  if(ws==='in-progress')return 3;
+  if(ws==='closed')return 9;
+  return 5;
+}
+function capaSortTime(f){
+  var t=Date.parse((f&&f.due)||(f&&f.updatedAt)||(f&&f.createdAt)||'');
+  return isNaN(t)?0:t;
+}
+function sortCapaRows(rows){
+  return (rows||[]).slice().sort(function(a,b){
+    return capaSortRank(a)-capaSortRank(b)||capaSortTime(a)-capaSortTime(b)||String(a.ref||'').localeCompare(String(b.ref||''));
+  });
+}
+function _localDateKeyFromDate(d){
+  if(!d||isNaN(d))return '';
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function _activityLogTime(l){
+  var t=_parseAuditTimestamp((l&&l.ts)||(l&&l.at)||(l&&l.updatedAt)||'');
+  return t||0;
+}
+function _activityLogDateKey(l){
+  var t=_activityLogTime(l);
+  return t?_localDateKeyFromDate(new Date(t)):'';
+}
+function _isAutoDelayActivity(l){
+  var action=String(l&&l.action||'').toLowerCase();
+  return action.indexOf('auto status changed')>-1||action.indexOf('due date missed')>-1;
 }
 function touchFinding(f){
   if(f&&typeof f==='object')f.updatedAt=new Date().toISOString();
   return f;
 }
 function renderCapaActivityLog(f){
-  var logs=Array.isArray(f&&f.activityLog)?f.activityLog.slice().reverse():[];
-  if(!logs.length)return '<div class="txs td" style="padding:8px 0;">No activity yet</div>';
-  return logs.map(function(l){
+  var todayKey=_localDateKeyFromDate(new Date());
+  var logs=(Array.isArray(f&&f.activityLog)?f.activityLog:[]).map(function(l,idx){
+    return {log:l,idx:idx,time:_activityLogTime(l),dateKey:_activityLogDateKey(l)};
+  }).filter(function(row){return row.dateKey===todayKey;})
+    .sort(function(a,b){return (b.time-a.time)||(b.idx-a.idx);});
+  if(!logs.length)return '<div class="txs td" style="padding:8px 0;">No activity today</div>';
+  var seenAutoDelayDays={};
+  var filteredLogs=[];
+  logs.forEach(function(row){
+    var l=row.log;
+    if(_isAutoDelayActivity(l)){
+      var dateKey=row.dateKey||_activityLogDateKey(l);
+      if(seenAutoDelayDays[dateKey])return;
+      seenAutoDelayDays[dateKey]=true;
+    }
+    filteredLogs.push(l);
+  });
+  return filteredLogs.map(function(l){
     return `<div class="tli"><div class="tldot" style="background:var(--bg3);">i</div><div><div class="txs f7">${sanitize(l&&l.user||'System')}: ${sanitize(l&&l.action||'Updated')}</div><div class="txx td">${sanitize(l&&l.ts||'')}</div></div></div>`;
   }).join('');
 }
 function openCapa(key){
+  var f=findCapa(key);
+  if(f&&!canAccessCapaFinding(f)){
+    showToast('Access denied for this CAPA');
+    return;
+  }
   APP.activeCapaId=key;
   navigate('capa');
 }
@@ -1929,6 +2158,15 @@ function dateInputValue(value){
   var d=auditDateFromInput(value);
   if(!d)return '';
   return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function importDateInputValue(value){
+  if(value===null||value===undefined||value==='')return todayInputValue();
+  if(typeof value==='number'){
+    var excelDate=new Date((value-25569)*86400000);
+    var excelIso=dateInputValue(excelDate);
+    return excelIso||todayInputValue();
+  }
+  return dateInputValue(value)||String(value).trim();
 }
 function todayInputValue(){
   return dateInputValue(new Date());
@@ -2509,7 +2747,12 @@ function processOverdueFindings(opts){
       item.capaStatus='delayed';
       item.delayedAt=item.delayedAt||nowIso;
       item.activityLog=Array.isArray(item.activityLog)?item.activityLog.slice():[];
-      item.activityLog.push({user:'System',action:'Auto status changed to Delayed (due date missed)',ts:stamp});
+      var hasSameDayLog=item.activityLog.some(function(l){
+        return _isAutoDelayActivity(l)&&_activityLogDateKey(l)===_localDateKeyFromDate(new Date());
+      });
+      if(!hasSameDayLog){
+        item.activityLog.push({user:'System',action:'Auto status changed to Delayed (due date missed)',ts:stamp});
+      }
       updated++;
       changed=true;
     }else if(item.capaStatus!=='delayed'){
@@ -2716,10 +2959,24 @@ function sendDeptReportEmail(code){
 }
 function sendCapaReminder(key){
   const f=findCapa(key);if(!f)return;
+  if(!canAccessCapaFinding(f)){
+    showToast('Access denied for this CAPA');
+    return Promise.resolve(false);
+  }
   const to=spocEmails(f.dept);
   const subject='CAPA Reminder - '+f.ref+' - '+(f.deptName||f.dept);
   const text='CAPA reminder for '+f.ref+'\nDepartment: '+(f.deptName||f.dept)+'\nSeverity: '+(SEV_LABEL[f.sev]||f.sev)+'\nDue: '+(f.due||'Not set')+'\nStatus: '+(STAT_LABEL[f.status]||f.status)+'\n\nFinding: '+(f.desc||'')+'\n\nPlease update closure evidence in OnePWS AuditPro.';
-  return sendLoggedEmail('capa_reminder',to,deptManagerEmails(f.dept),subject,text,'','');
+  return sendLoggedEmail('capa_reminder',to,deptManagerEmails(f.dept),subject,text,'','').then(function(ok){
+    if(ok){
+      const rows=APP.findings;const row=findCapa(key,rows);
+      if(row){
+        row.activityLog=row.activityLog||[];touchFinding(row);
+        row.activityLog.push({user:APP.currentUser?.name||'System',action:'Reminder email sent',ts:new Date().toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'})});
+        APP.findings=rows;selectCapa(capaKey(row));
+      }
+    }
+    return ok;
+  });
 }
 document.addEventListener('click',e=>{
   const p=el('npanel');
@@ -2825,7 +3082,7 @@ function renderDashboard(){
       <div class="card">
         <div class="ch"><span class="dot" style="background:var(--red)"></span>Critical Alerts</div>
         ${F.filter(f=>f.status!=='closed').slice(0,3).map(f=>`
-          <div class="fcard ${f.sev}" onclick="openCapa('${capaKey(f)}')">
+          <div class="fcard ${f.sev}" onclick="openCapa(${jsArg(capaKey(f))})">
             <div class="fb"><span class="f7 tsm">${f.ref}</span>${badge(SEV_BADGE[f.sev],SEV_LABEL[f.sev])}</div>
             <div class="txs td mt1">${f.deptName} · ${f.desc}</div>
             <div class="txs mt1" style="color:var(--${f.status==='delayed'?'red':'amber'})">${f.clause} · ${f.status==='delayed'?'⏰ Overdue':f.due}</div>
@@ -4034,7 +4291,7 @@ function renderFindingsTable(){
     <td>${badge('b-blue',f.clause)}</td>
     <td style="color:${f.status==='delayed'?'var(--red)':'inherit'};font-weight:${f.status==='delayed'?800:400};">${f.due}</td>
     <td>${badge(STAT_BADGE[f.status]||'b-gray',STAT_LABEL[f.status]||f.status)}${f.type==='repeat'?' '+badge('b-purple','Repeat'):''}</td>
-    ${role!=='viewer'?`<td><button class="btn btn-ghost btn-sm" onclick="openCapa('${capaKey(f)}')">CAPA →</button></td>`:'<td>—</td>'}
+    ${role!=='viewer'?`<td><button class="btn btn-ghost btn-sm" onclick="openCapa(${jsArg(capaKey(f))})">CAPA →</button></td>`:'<td>—</td>'}
   </tr>`).join('')||'<tr><td colspan="8" style="text-align:center;padding:18px;color:var(--text3);">No findings match filters</td></tr>';
   if(cnt)cnt.textContent=data.length+' record(s)';
   // Restore filter values
@@ -4060,7 +4317,7 @@ function exportFindingsExcel(){
 // CAPA
 // ═══════════════════════════════════════════════════
 function renderCapa(){
-  const F=filterByDateRange(APP.findings,'due');const uRole=APP.currentUser?.role;const uDept=APP.currentUser?.dept||'';const scoped=(uRole==='spoc')?F.filter(f=>f.dept===uDept):(uRole==='manager'?F.filter(f=>managerDeptCodes().includes(f.dept)):F);const open=scoped.filter(f=>f.status!=='closed');
+  const F=filterByDateRange(APP.findings,'due');const uRole=APP.currentUser?.role;const uDept=APP.currentUser?.dept||'';const scoped=sortCapaRows((uRole==='spoc')?F.filter(f=>f.dept===uDept):(uRole==='manager'?F.filter(f=>managerDeptCodes().includes(f.dept)):F));const open=scoped.filter(f=>f.status!=='closed');
   const deptOptions=(uRole==='spoc'?APP.depts.filter(d=>d.code===uDept):(uRole==='manager'?APP.depts.filter(d=>managerDeptCodes().includes(d.code)):APP.depts));
   const active=findCapa(APP.activeCapaId,scoped)||open[0]||scoped[0]||null;if(active)APP.activeCapaId=capaKey(active);
   return`
@@ -4084,9 +4341,9 @@ function renderCapa(){
           <select id="capa-filter" onchange="APP.capaStatusFilter=this.value;filterCapaList()"><option value="" ${!APP.capaStatusFilter?'selected':''}>All status</option><option value="open" ${APP.capaStatusFilter==='open'?'selected':''}>Open</option><option value="in-progress" ${APP.capaStatusFilter==='in-progress'?'selected':''}>In Progress</option><option value="delayed" ${APP.capaStatusFilter==='delayed'?'selected':''}>Delayed</option><option value="pending-closure" ${APP.capaStatusFilter==='pending-closure'?'selected':''}>Submit For Review</option><option value="closed" ${APP.capaStatusFilter==='closed'?'selected':''}>Closed</option></select>
         </div>
         <div class="capa-list" id="capa-list">
-        ${scoped.map(f=>{var ws=findingWorkflowStatus(f);return`<div class="fcard ${f.sev} capa-item ${capaKey(f)===APP.activeCapaId?'active':''}" data-key="${capaKey(f)}" data-status="${ws||''}" data-dept="${f.dept||''}" data-search="${sanitize([f.ref,f.deptName,f.desc,f.clause].join(' ')).toLowerCase()}" style="cursor:pointer;" onclick="selectCapa('${capaKey(f)}')">
-          <div class="fb"><span class="capa-ref">${f.ref}</span>${badge(STAT_BADGE[ws]||'b-gray',STAT_LABEL[ws]||ws)}</div>
-          <div class="txs td">${f.deptName} · ${(f.desc||'').substring(0,45)}</div>
+        ${scoped.map(f=>{var ws=findingWorkflowStatus(f),ck=capaKey(f);return`<div class="fcard ${sanitize(f.sev||'')} capa-item ${ck===APP.activeCapaId?'active':''}" data-key="${sanitize(ck)}" data-status="${sanitize(ws||'')}" data-dept="${sanitize(f.dept||'')}" data-search="${sanitize([f.ref,f.deptName,f.desc,f.clause].join(' ')).toLowerCase()}" style="cursor:pointer;" onclick="selectCapa(${jsArg(ck)})">
+          <div class="fb"><span class="capa-ref">${sanitize(f.ref)}</span>${badge(STAT_BADGE[ws]||'b-gray',STAT_LABEL[ws]||ws)}</div>
+          <div class="txs td">${sanitize(f.deptName)} · ${sanitize((f.desc||'').substring(0,45))}</div>
         </div>`;}).join('')||'<div class="txs td">No CAPAs found</div>'}
         </div>
         <button class="btn btn-ghost btn-sm wf mt2" onclick="exportCapaExcel()">📊 Export CAPA</button>
@@ -4117,8 +4374,9 @@ function filterCapaList(){
 }
 function renderCapaDetail(f){
   const role=APP.currentUser?.role;
-  const canClose=role==='spoc'||role==='admin';
+  const canClose=canSubmitCapaClosure(role);
   const canReview=canReviewCapaStatus(role);
+  const canEditDue=canEditCapaDue(role);
   const key=capaKey(f);
   const ws=findingWorkflowStatus(f);
   const si={open:0,'in-progress':1,delayed:1,'pending-closure':2,submitted:2,closed:3}[ws]||0;
@@ -4128,30 +4386,30 @@ function renderCapaDetail(f){
     ${steps.map((s,i)=>`<div class="stp"><div style="display:flex;flex-direction:column;align-items:center;"><div class="stpc ${i<si?'done':i===si?'active':''}">${i<si?'✓':i+1}</div><div class="stpl">${s}</div></div></div>${i<steps.length-1?`<div class="stpline ${i<si?'done':''}"></div>`:''}`).join('')}
   </div>
   <div style="background:var(--red-bg);border-radius:8px;padding:10px;margin-bottom:12px;border-left:3px solid var(--red);">
-    <div class="f7">${f.desc}</div><div class="txs td mt1">${f.deptName} · ${f.clause}</div>
+    <div class="f7">${sanitize(f.desc)}</div><div class="txs td mt1">${sanitize(f.deptName)} · ${sanitize(f.clause)}</div>
   </div>
   <div class="grid g2 mb2" style="gap:9px;">
     <div><label class="lbl">Status</label>${renderCapaStatusSelect(key,f,role)}</div>
-    <div><label class="lbl">Due Date</label><input type="date" value="${f.due||''}" onchange="updateCapaDue('${key}',this.value)"></div>
+    <div><label class="lbl">Due Date</label><input type="date" value="${sanitize(f.due||'')}" ${canEditDue?'':'disabled'} onchange="updateCapaDue(${jsArg(key)},this.value)"></div>
   </div>
   ${f.closureEvidence?`<div style="background:var(--green-bg);border:1px solid #86efac;border-radius:7px;padding:9px;margin-bottom:11px;">
-    <div class="txs f7 mb1">📋 Closure Evidence Submitted For Review</div><div class="txs tm">${f.closureEvidence}</div>
+    <div class="txs f7 mb1">📋 Closure Evidence Submitted For Review</div><div class="txs tm">${sanitize(f.closureEvidence)}</div>
     ${f.closureFiles?.length?`<div class="evpair mt2">${f.closureFiles.slice(0,2).map((fl,i)=>`<div class="evbox"><div class="evlabel">${i===0?'Before':'After'}</div>${isImageMedia(fl)?`<img src="${mediaUrl(fl)}">`:'<div class="evph">'+mediaIcon(fl)+'</div>'}</div>`).join('')}</div>`:''}
-    <div class="txs td mt1">By ${f.closureSubmittedBy||'—'} · ${f.closureDate||'—'}</div>
+    <div class="txs td mt1">By ${sanitize(f.closureSubmittedBy||'—')} · ${sanitize(f.closureDate||'—')}</div>
   </div>`:''}
   ${f.decision?`<div style="background:${f.decision==='accept'?'var(--green-bg)':'var(--red-bg)'};border:1px solid ${f.decision==='accept'?'#86efac':'#fca5a5'};border-radius:7px;padding:9px;margin-bottom:11px;">
-    <div class="txs f7">${f.decision==='accept'?'✅ Accepted':'❌ Rejected'} — ${f.decisionDate||''}</div>
+    <div class="txs f7">${f.decision==='accept'?'✅ Accepted':'❌ Rejected'} — ${sanitize(f.decisionDate||'')}</div>
     ${f.decision==='accept'?`<div class="txs td mt1">Audit Closure Date: ${auditClosureDateText(f.auditClosureDate||f.closedAt||f.decisionDate)}</div>`:''}
-    ${f.decisionComments?`<div class="txs td mt1">${f.decisionComments}</div>`:''}
+    ${f.decisionComments?`<div class="txs td mt1">${sanitize(f.decisionComments)}</div>`:''}
   </div>`:''}
   <div class="ch mt2"><span class="dot" style="background:var(--teal)"></span>Activity Log</div>
   ${renderCapaActivityLog(f)}
   <div class="flex g2u fw mt3">
-    ${canClose&&ws!=='closed'&&ws!=='pending-closure'?`<button class="btn btn-success btn-sm" onclick="openClosureModal('${key}')">Submit For Review</button>`:``}
-    ${canReview&&(ws==='pending-closure'||(role==='admin'&&ws!=='closed'))?`<button class="btn btn-primary btn-sm" onclick="openReviewModal('${key}')">Review Closure</button>`:``}
-    ${role==='admin'&&ws!=='closed'&&ws!=='pending-closure'?`<button class="btn btn-amber btn-sm" onclick="updateCapaStatus('${key}','closed')">Force Close</button>`:``}
+    ${canClose&&ws!=='closed'&&ws!=='pending-closure'?`<button class="btn btn-success btn-sm" onclick="openClosureModal(${jsArg(key)})">Submit For Review</button>`:``}
+    ${canReview&&ws==='pending-closure'?`<button class="btn btn-primary btn-sm" onclick="openReviewModal(${jsArg(key)})">Review Closure</button>`:``}
+    ${role==='admin'&&ws!=='closed'&&ws!=='pending-closure'?`<button class="btn btn-amber btn-sm" onclick="updateCapaStatus(${jsArg(key)},'closed')">Force Close</button>`:``}
     ${ws==='closed'?badge('b-green','✅ Verified & Closed'):''}
-    <button class="btn btn-ghost btn-sm" onclick="sendCapaReminder('${key}')">📧 Remind</button>
+    <button class="btn btn-ghost btn-sm" onclick="sendCapaReminder(${jsArg(key)})">📧 Remind</button>
   </div>`;
 }
 // selectCapa defined below
@@ -4159,6 +4417,10 @@ function selectCapa(key){
   APP.activeCapaId=key;
   const f=findCapa(key);
   if(!f)return;
+  if(!canAccessCapaFinding(f)){
+    showToast('Access denied for this CAPA');
+    return;
+  }
   // Update detail body only — no full re-render
   var body=el('capa-body');
   if(body){body.innerHTML=renderCapaDetail(f);renderIcons(body);}
@@ -4174,7 +4436,11 @@ function selectCapa(key){
 function updateCapaStatus(key,status,selectEl){
   const F=APP.findings;const f=findCapa(key,F);if(!f)return;
   const role=APP.currentUser?.role;
-  if(status==='pending-closure'&&!canReviewCapaStatus(role)){
+  if(!canAccessCapaFinding(f,role)){
+    showToast('Access denied for this CAPA');
+    return;
+  }
+  if(status==='pending-closure'&&!canSubmitCapaClosure(role)){
     openClosureModal(key);
     selectCapa(key);
     showToast('Add closure evidence to submit for review');
@@ -4184,6 +4450,18 @@ function updateCapaStatus(key,status,selectEl){
     selectCapa(key);
     if(selectEl)selectEl.value=findingWorkflowStatus(f);
     showToast(status==='delayed'?'Delayed status is applied automatically after due date is missed':'Only Auditor or Master Admin can set this status');
+    return;
+  }
+  if(status==='closed'&&findingWorkflowStatus(f)==='pending-closure'){
+    openReviewModal(key);
+    selectCapa(key);
+    showToast('Review closure evidence before closing');
+    return;
+  }
+  if(status==='closed'&&role!=='admin'){
+    selectCapa(key);
+    if(selectEl)selectEl.value=findingWorkflowStatus(f);
+    showToast('Only Master Admin can force close without review');
     return;
   }
   f.status=status;f.capaStatus=status==='pending-closure'?'submitted':status;f.activityLog=f.activityLog||[];touchFinding(f);
@@ -4202,6 +4480,11 @@ function updateCapaStatus(key,status,selectEl){
 }
 function updateCapaDue(key,due){
   const F=APP.findings;const f=findCapa(key,F);if(!f)return;
+  if(!canAccessCapaFinding(f)||!canEditCapaDue()){
+    selectCapa(key);
+    showToast('Only Auditor or Master Admin can change CAPA due date');
+    return;
+  }
   f.due=due;f.activityLog=f.activityLog||[];touchFinding(f);
   f.activityLog.push({user:APP.currentUser?.name||'System',action:'Due date -> '+(due||'Not set'),ts:new Date().toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'})});
   APP.findings=F;APP.activeCapaId=capaKey(f);selectCapa(APP.activeCapaId);showToast('Due date updated');
@@ -4209,12 +4492,20 @@ function updateCapaDue(key,due){
 function openClosureModal(key){
   APP.activeReviewId=key;APP.closureFiles=[];
   const f=findCapa(key);
-  el('cl-finfo').innerHTML=f?`<strong>${f.ref}</strong>: ${f.desc}<br><span class="txs td">${f.deptName} · ${f.clause}</span>`:'';
+  if(!f||!canAccessCapaFinding(f)||!canSubmitCapaClosure()){
+    showToast('Only department SPOC or Master Admin can submit closure');
+    return;
+  }
+  el('cl-finfo').innerHTML=f?`<strong>${sanitize(f.ref)}</strong>: ${sanitize(f.desc)}<br><span class="txs td">${sanitize(f.deptName)} · ${sanitize(f.clause)}</span>`:'';
   el('cl-ev').value='';el('cl-prev').innerHTML='';openM('m-closure');
 }
 function submitClosure(){
   const ev=el('cl-ev').value.trim();if(!ev){showToast('⚠ Describe the closure');return;}
   const key=APP.activeReviewId;const F=APP.findings;const f=findCapa(key,F);if(!f)return;
+  if(!canAccessCapaFinding(f)||!canSubmitCapaClosure()){
+    showToast('Only department SPOC or Master Admin can submit closure');
+    return;
+  }
   const nowIso=new Date().toISOString();
   f.status='pending-closure';f.capaStatus='submitted';f.closureEvidence=ev;
   f.closureFiles=APP.closureFiles.slice();f.closureSubmittedBy=APP.currentUser?.name;
@@ -4227,13 +4518,25 @@ function submitClosure(){
 }
 function openReviewModal(key){
   APP.activeReviewId=key;const f=findCapa(key);
-  el('rev-content').innerHTML=f?`<div style="background:var(--bg3);border-radius:7px;padding:9px;font-size:12px;"><div class="f7">${f.ref}: ${f.desc}</div><div class="txs td mt1">By ${f.closureSubmittedBy} · ${f.closureDate}</div><div class="mt2"><strong>Evidence:</strong><div class="tsm mt1">${f.closureEvidence}</div></div>${f.closureFiles?.length?`<div class="evpair mt2">${f.closureFiles.slice(0,2).map((fl,i)=>`<div class="evbox"><div class="evlabel">${i===0?'Before':'After'}</div>${isImageMedia(fl)?`<img src="${mediaUrl(fl)}">`:'<div class="evph">'+mediaIcon(fl)+'</div>'}</div>`).join('')}</div>`:''}</div>`:'';
+  if(!f||!canAccessCapaFinding(f)||!canReviewCapaStatus()){
+    showToast('Only Auditor or Master Admin can review closure');
+    return;
+  }
+  if(findingWorkflowStatus(f)!=='pending-closure'){
+    showToast('Closure review is available after SPOC submits evidence');
+    return;
+  }
+  el('rev-content').innerHTML=f?`<div style="background:var(--bg3);border-radius:7px;padding:9px;font-size:12px;"><div class="f7">${sanitize(f.ref)}: ${sanitize(f.desc)}</div><div class="txs td mt1">By ${sanitize(f.closureSubmittedBy)} · ${sanitize(f.closureDate)}</div><div class="mt2"><strong>Evidence:</strong><div class="tsm mt1">${sanitize(f.closureEvidence)}</div></div>${f.closureFiles?.length?`<div class="evpair mt2">${f.closureFiles.slice(0,2).map((fl,i)=>`<div class="evbox"><div class="evlabel">${i===0?'Before':'After'}</div>${isImageMedia(fl)?`<img src="${mediaUrl(fl)}">`:'<div class="evph">'+mediaIcon(fl)+'</div>'}</div>`).join('')}</div>`:''}</div>`:'';
   var closeDate=el('rev-close-date');
   if(closeDate){closeDate.max=todayInputValue();closeDate.value=dateInputValue(f?.auditClosureDate||f?.closedAt||f?.closureDate||new Date());}
   el('rev-cmt').value='';openM('m-review');
 }
 function reviewDec(dec){
   const cmt=el('rev-cmt').value.trim();const key=APP.activeReviewId;const F=APP.findings;const f=findCapa(key,F);if(!f)return;
+  if(!canAccessCapaFinding(f)||!canReviewCapaStatus()){
+    showToast('Only Auditor or Master Admin can review closure');
+    return;
+  }
   var auditClosureDate=el('rev-close-date')?el('rev-close-date').value:'';
   if(dec==='accept'){
     var selected=auditDateFromInput(auditClosureDate),today=auditDateFromInput(todayInputValue());
@@ -4961,7 +5264,7 @@ function renderMytasks(){
     <div class="stat"><div class="sl">Overdue</div><div class="sv" style="color:var(--red)">${overdue}</div><div class="sd dd">Immediate action</div></div>
     <div class="stat"><div class="sl">Due in 3 Days</div><div class="sv" style="color:var(--amber)">${ds}</div></div>
   </div>
-  ${tasks.length?tasks.map(t=>`<div class="tcard ${t.status}" onclick="${t.link==='capa'&&t.key?`openCapa('${t.key}')`:`navigate('${t.link}')`}">
+  ${tasks.length?tasks.map(t=>`<div class="tcard ${t.status}" onclick="${t.link==='capa'&&t.key?`openCapa(${jsArg(t.key)})`:`navigate('${t.link}')`}">
     <div style="flex:1;"><div class="fb mb1"><span class="tsm f7">${t.title}</span>${badge(t.pri==='P1'?'b-red':t.pri==='P2'?'b-amber':'b-gray',t.pri)}</div>
     <div class="flex g2u txs td">${badge(t.status==='overdue'?'b-red':t.status==='due-soon'?'b-amber':'b-teal',t.status==='overdue'?'⏰ Overdue':t.status==='due-soon'?'⚡ Due Soon':'📅 Upcoming')}<span>${t.dueDate}</span></div></div>
     <button class="btn btn-ghost btn-sm">→</button>
@@ -4990,7 +5293,7 @@ function renderManagerPanel(){
   const byDept=codes.map(code=>{const d=APP.depts.find(x=>x.code===code)||{code,name:code};const df=open.filter(f=>f.dept===code);return{code,name:d.name,total:df.length,overdue:df.filter(f=>delayDays(f)>0).length,critical:df.filter(f=>f.sev==='critical').length};});
   return `<div class="grid g3 sg"><div class="stat"><div class="sl">Managed Depts</div><div class="sv">${codes.length}</div></div><div class="stat"><div class="sl">Open NCs</div><div class="sv">${open.length}</div></div><div class="stat"><div class="sl">Overdue</div><div class="sv" style="color:var(--red)">${overdue.length}</div></div></div>
   <div class="card sg"><div class="ch"><span class="dot" style="background:var(--amber)"></span>Department Control</div><div class="tw"><table><thead><tr><th>Dept</th><th>Open</th><th>Overdue</th><th>Critical</th><th>Action</th></tr></thead><tbody>${byDept.map(r=>`<tr><td class="pr">${r.name}</td><td>${r.total}</td><td style="color:var(--red);font-weight:800">${r.overdue}</td><td>${r.critical}</td><td><button class="btn btn-ghost btn-sm" onclick="managerSendDeptReminder('${r.code}')">Reminder</button></td></tr>`).join('')||'<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:12px;">No managed departments mapped</td></tr>'}</tbody></table></div></div>
-  <div class="card"><div class="fb mb2"><div class="ch" style="margin:0"><span class="dot" style="background:var(--red)"></span>Overdue / Open NCs</div><button class="btn btn-brand btn-sm" onclick="managerSendSummary()">Send Summary</button></div><div class="tw"><table><thead><tr><th>Ref</th><th>Dept</th><th>Issue</th><th>Severity</th><th>Due</th><th>Delay</th><th>Status</th><th>Action</th></tr></thead><tbody>${open.map(f=>`<tr><td class="pr">${f.ref}</td><td>${f.deptName}</td><td style="max-width:260px;">${sanitize((f.desc||'').substring(0,95))}</td><td>${badge(SEV_BADGE[f.sev]||'b-gray',SEV_LABEL[f.sev]||f.sev)}</td><td>${f.due||'-'}</td><td style="font-weight:800;color:${delayDays(f)>0?'var(--red)':'var(--text2)'}">${delayDays(f)}d</td><td>${badge(STAT_BADGE[f.status]||'b-gray',STAT_LABEL[f.status]||f.status)}</td><td><button class="btn btn-ghost btn-sm" onclick="openCapa('${capaKey(f)}')">Open</button></td></tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:12px;">No open NCs for managed departments</td></tr>'}</tbody></table></div></div>`;
+  <div class="card"><div class="fb mb2"><div class="ch" style="margin:0"><span class="dot" style="background:var(--red)"></span>Overdue / Open NCs</div><button class="btn btn-brand btn-sm" onclick="managerSendSummary()">Send Summary</button></div><div class="tw"><table><thead><tr><th>Ref</th><th>Dept</th><th>Issue</th><th>Severity</th><th>Due</th><th>Delay</th><th>Status</th><th>Action</th></tr></thead><tbody>${open.map(f=>`<tr><td class="pr">${f.ref}</td><td>${f.deptName}</td><td style="max-width:260px;">${sanitize((f.desc||'').substring(0,95))}</td><td>${badge(SEV_BADGE[f.sev]||'b-gray',SEV_LABEL[f.sev]||f.sev)}</td><td>${f.due||'-'}</td><td style="font-weight:800;color:${delayDays(f)>0?'var(--red)':'var(--text2)'}">${delayDays(f)}d</td><td>${badge(STAT_BADGE[f.status]||'b-gray',STAT_LABEL[f.status]||f.status)}</td><td><button class="btn btn-ghost btn-sm" onclick="openCapa(${jsArg(capaKey(f))})">Open</button></td></tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:12px;">No open NCs for managed departments</td></tr>'}</tbody></table></div></div>`;
 }
 function managerSendDeptReminder(code){
   const rows=managerFindings().filter(f=>f.dept===code&&f.status!=='closed');if(!rows.length){showToast('No open NCs for this department');return;}
@@ -5042,12 +5345,12 @@ function renderTrackerBody(){
     const tPages=Math.ceil(ttl/tps);if(tpg>tPages&&tPages>0)APP.trackerPage=tPages;
     const tPageData=data.slice(((APP.trackerPage||1)-1)*tps,(APP.trackerPage||1)*tps);
     data=tPageData;
-    tb.innerHTML=`<div class="tw"><table><thead><tr><th>ID</th><th>Dept</th><th>Description</th><th>Severity</th><th>Clause</th><th>Due</th><th>Status</th><th>Action</th></tr></thead><tbody>${data.map(f=>`<tr><td class="pr">${f.ref}</td><td>${f.deptName}</td><td style="max-width:180px;">${f.desc}</td><td>${badge(SEV_BADGE[f.sev]||'b-gray',SEV_LABEL[f.sev]||f.sev)}</td><td>${badge('b-blue',f.clause)}</td><td style="color:${f.status==='delayed'?'var(--red)':'inherit'}">${f.due}</td><td>${badge(STAT_BADGE[f.status]||'b-gray',STAT_LABEL[f.status]||f.status)}</td><td><button class="btn btn-ghost btn-sm" onclick="openCapa('${capaKey(f)}')">Open</button></td></tr>`).join('')}</tbody></table></div>${renderPagination(ttl,APP.trackerPage||1,tps,'setTrackerPage')}<div class="txs td mt1">${ttl} record(s)</div>`;}
+    tb.innerHTML=`<div class="tw"><table><thead><tr><th>ID</th><th>Dept</th><th>Description</th><th>Severity</th><th>Clause</th><th>Due</th><th>Status</th><th>Action</th></tr></thead><tbody>${data.map(f=>`<tr><td class="pr">${f.ref}</td><td>${f.deptName}</td><td style="max-width:180px;">${f.desc}</td><td>${badge(SEV_BADGE[f.sev]||'b-gray',SEV_LABEL[f.sev]||f.sev)}</td><td>${badge('b-blue',f.clause)}</td><td style="color:${f.status==='delayed'?'var(--red)':'inherit'}">${f.due}</td><td>${badge(STAT_BADGE[f.status]||'b-gray',STAT_LABEL[f.status]||f.status)}</td><td><button class="btn btn-ghost btn-sm" onclick="openCapa(${jsArg(capaKey(f))})">Open</button></td></tr>`).join('')}</tbody></table></div>${renderPagination(ttl,APP.trackerPage||1,tps,'setTrackerPage')}<div class="txs td mt1">${ttl} record(s)</div>`;}
   if(APP.trackerTab==='capa'){
     let data=filteredFindings().filter(f=>f.status!=='closed'&&(APP.currentUser?.role!=='spoc'||f.dept===APP.currentUser?.dept)&&(APP.currentUser?.role!=='manager'||managerDeptCodes().includes(f.dept)));if(q)data=data.filter(f=>[f.ref,f.deptName,f.desc].join(' ').toLowerCase().includes(q));
     const cpg=APP.trackerPage||1;const cps2=APP.pageSize;const ctl=data.length;
     data=data.slice((cpg-1)*cps2,cpg*cps2);
-    tb.innerHTML=`<div class="tw"><table><thead><tr><th>Ref</th><th>Dept</th><th>Issue</th><th>Severity</th><th>Due</th><th>Days</th><th>Status</th><th>Action</th></tr></thead><tbody>${data.map(f=>{const dl=Math.round((new Date(f.due)-new Date())/86400000);return`<tr><td class="pr">${f.ref}</td><td>${f.deptName}</td><td style="max-width:160px;">${(f.desc||'').substring(0,55)}</td><td>${badge(SEV_BADGE[f.sev]||'b-gray',SEV_LABEL[f.sev]||f.sev)}</td><td>${f.due}</td><td style="color:${dl<0?'var(--red)':dl<=3?'var(--amber)':'inherit'};font-weight:${dl<0?800:400};">${dl<0?`${Math.abs(dl)}d over`:`${dl}d`}</td><td>${badge(STAT_BADGE[f.status]||'b-gray',STAT_LABEL[f.status]||f.status)}</td><td><button class="btn btn-ghost btn-sm" onclick="openCapa('${capaKey(f)}')">Open</button></td></tr>`;}).join('')}</tbody></table></div>${renderPagination(ctl,cpg,cps2,'setTrackerPage')}<div class="txs td mt1">${ctl} open CAPA(s)</div>`;}
+    tb.innerHTML=`<div class="tw"><table><thead><tr><th>Ref</th><th>Dept</th><th>Issue</th><th>Severity</th><th>Due</th><th>Days</th><th>Status</th><th>Action</th></tr></thead><tbody>${data.map(f=>{const dl=Math.round((new Date(f.due)-new Date())/86400000);return`<tr><td class="pr">${f.ref}</td><td>${f.deptName}</td><td style="max-width:160px;">${(f.desc||'').substring(0,55)}</td><td>${badge(SEV_BADGE[f.sev]||'b-gray',SEV_LABEL[f.sev]||f.sev)}</td><td>${f.due}</td><td style="color:${dl<0?'var(--red)':dl<=3?'var(--amber)':'inherit'};font-weight:${dl<0?800:400};">${dl<0?`${Math.abs(dl)}d over`:`${dl}d`}</td><td>${badge(STAT_BADGE[f.status]||'b-gray',STAT_LABEL[f.status]||f.status)}</td><td><button class="btn btn-ghost btn-sm" onclick="openCapa(${jsArg(capaKey(f))})">Open</button></td></tr>`;}).join('')}</tbody></table></div>${renderPagination(ctl,cpg,cps2,'setTrackerPage')}<div class="txs td mt1">${ctl} open CAPA(s)</div>`;}
   if(APP.trackerTab==='learnings'){
     let data=scopedLearnings();if(q)data=data.filter(l=>[l.title,l.rc,l.pa,l.clause].join(' ').toLowerCase().includes(q));
     const lpg=APP.trackerPage||1;const lps=APP.pageSize;const ltl=data.length;
@@ -5154,7 +5457,8 @@ function processImportRows(rows,fname){
       if(type==='findings'){
         const dept=APP.depts.find(d=>d.name.toLowerCase().includes((row.Department||row.dept||'').toLowerCase()))||{name:row.Department||'Unknown',code:'UNK'};
         const sev=normalizeAuditSeverity(row.Severity||row.severity||'minor');
-        const nf={id:'imp_'+Date.now()+'_'+i,ref:row.ID||row.id||`IMP-${Date.now()}-${i}`,dept:dept.code,deptName:dept.name,desc:row.Description||row.description||row.Finding||'',sev:['critical','major','minor','obs'].includes(sev)?sev:'minor',clause:String(row.Clause||row.clause||'§—'),due:(function(d){if(!d)return new Date().toISOString().split('T')[0];if(typeof d==='number'){const dt=new Date((d-25569)*86400000);return dt.toISOString().split('T')[0];}return String(d);})(row.DueDate||row.due_date),status:'open',capaStatus:'open',type:'imported',activityLog:[{user:APP.currentUser?.name,action:`Imported from ${fname}`,ts:new Date().toLocaleString()}],closureEvidence:'',closureFiles:[],closureSubmittedBy:null,closureDate:null,decision:null,decisionComments:'',decisionDate:null};
+        const nowIso=new Date().toISOString(),nowText=new Date().toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'});
+        const nf={id:'imp_'+Date.now()+'_'+i,ref:row.ID||row.id||`IMP-${Date.now()}-${i}`,dept:dept.code,deptName:dept.name,desc:row.Description||row.description||row.Finding||'',sev:['critical','major','minor','obs'].includes(sev)?sev:'minor',clause:String(row.Clause||row.clause||'§—'),due:importDateInputValue(row.DueDate||row.due_date),status:'open',capaStatus:'open',type:'imported',createdAt:nowIso,updatedAt:nowIso,activityLog:[{user:APP.currentUser?.name,action:`Imported from ${fname}`,ts:nowText}],closureEvidence:'',closureFiles:[],closureSubmittedBy:null,closureDate:null,decision:null,decisionComments:'',decisionDate:null};
         if(!nf.desc){errs++;log.push(`<span style="color:var(--red)">Row ${rn}: No description — skipped</span>`);return;}
         const F=APP.findings;if(!F.find(f=>f.ref===nf.ref)){F.push(nf);APP.findings=F;_impFindIds.push(nf.id);imp++;}else log.push(`<span style="color:var(--amber)">Row ${rn}: ${nf.ref} exists — skipped</span>`);
       }else if(type==='learnings'){
