@@ -291,7 +291,7 @@ function mergeEmailLogs(existing, incoming, clearedAt) {
 
 function userMergeKey(user) {
   if (!user || typeof user !== 'object') return '';
-  return String(user.id || user.loginId || user.email || '').trim().toLowerCase();
+  return String(user.loginId || user.email || user.id || '').trim().toLowerCase();
 }
 
 function mergeUsersForSync(existing, incoming) {
