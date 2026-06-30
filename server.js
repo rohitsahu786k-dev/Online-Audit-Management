@@ -304,13 +304,71 @@ function hasReviewDecision(finding) {
   return decision === 'accept' || decision === 'reject';
 }
 
+function hasClosureSubmission(finding) {
+  if (!finding || typeof finding !== 'object') return false;
+  if (String(finding.closureEvidence || '').trim()) return true;
+  if (String(finding.closureSubmittedBy || '').trim() || String(finding.closureDate || '').trim()) return true;
+  return Array.isArray(finding.activityLog) && finding.activityLog.some(log => /closure submitted/i.test(String((log && log.action) || '')));
+}
+
+function hasUnreviewedClosureSubmission(finding) {
+  if (!hasClosureSubmission(finding)) return false;
+  if (!hasReviewDecision(finding)) return true;
+  const logs = Array.isArray(finding && finding.activityLog) ? finding.activityLog : [];
+  let submitIndex = -1;
+  let decisionIndex = -1;
+  logs.forEach((log, index) => {
+    const action = String((log && log.action) || '');
+    if (/closure submitted/i.test(action)) submitIndex = index;
+    if (/closure (accepted|rejected)/i.test(action)) decisionIndex = index;
+  });
+  return submitIndex > -1 && submitIndex > decisionIndex;
+}
+
 function isPendingReviewFinding(finding) {
   const status = String((finding && finding.status) || '').toLowerCase();
   const capaStatus = String((finding && finding.capaStatus) || '').toLowerCase();
-  return status === 'pending-closure' || capaStatus === 'submitted';
+  return status === 'pending-closure' || capaStatus === 'submitted' || (status === 'delayed' && hasUnreviewedClosureSubmission(finding));
+}
+
+function normalizeFindingSyncState(finding) {
+  if (!finding || typeof finding !== 'object') return finding;
+  const item = { ...finding };
+  let status = String(item.status || '').toLowerCase();
+  let capaStatus = String(item.capaStatus || '').toLowerCase();
+  const decision = String(item.decision || '').toLowerCase();
+  const pendingSignal = status === 'pending-closure' || capaStatus === 'submitted';
+
+  if (pendingSignal && (decision === 'accept' || decision === 'reject')) {
+    item.decision = null;
+    item.decisionComments = '';
+    item.decisionDate = null;
+    if (decision === 'accept') {
+      item.auditClosureDate = null;
+      item.closedAt = null;
+    }
+    status = String(item.status || '').toLowerCase();
+    capaStatus = String(item.capaStatus || '').toLowerCase();
+  }
+
+  if (status === 'delayed' && capaStatus === 'delayed' && hasUnreviewedClosureSubmission(item)) {
+    item.status = 'pending-closure';
+    item.capaStatus = 'submitted';
+    if (decision === 'accept' || decision === 'reject') {
+      item.decision = null;
+      item.decisionComments = '';
+      item.decisionDate = null;
+      item.auditClosureDate = null;
+      item.closedAt = null;
+    }
+  }
+
+  return item;
 }
 
 function chooseFindingForSync(current, incoming) {
+  current = normalizeFindingSyncState(current);
+  incoming = normalizeFindingSyncState(incoming);
   if (!current) return incoming;
   if (!incoming) return current;
 
@@ -330,7 +388,9 @@ function chooseFindingForSync(current, incoming) {
 
 function mergeFindingsForSync(currentValue, incomingValue) {
   if (!Array.isArray(incomingValue)) return incomingValue;
+  incomingValue = incomingValue.map(normalizeFindingSyncState);
   if (!Array.isArray(currentValue) || !currentValue.length) return incomingValue;
+  currentValue = currentValue.map(normalizeFindingSyncState);
 
   const currentByKey = new Map();
   currentValue.forEach(finding => {

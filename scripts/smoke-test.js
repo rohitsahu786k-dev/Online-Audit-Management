@@ -4,6 +4,8 @@ const { chromium } = require('playwright');
 const fs = require('fs');
 
 const APP_URL = process.env.APP_URL;
+const SMOKE_LOGIN_ID = process.env.SMOKE_LOGIN_ID || 'admin';
+const SMOKE_PASSWORD = process.env.SMOKE_PASSWORD || 'Admin123!';
 const BROWSER_CANDIDATES = [
   process.env.PLAYWRIGHT_CHROME,
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
@@ -86,8 +88,8 @@ async function main() {
     if (!(await page.locator('#m-forgot:not(.hidden)').isVisible())) issues.push('Forgot password modal did not open');
     await page.keyboard.press('Escape');
 
-    await page.fill('#li-u', 'admin');
-    await page.fill('#li-p', 'Admin123!');
+    await page.fill('#li-u', SMOKE_LOGIN_ID);
+    await page.fill('#li-p', SMOKE_PASSWORD);
     await page.click('button:has-text("Sign In")');
     await page.waitForSelector('#app:not(.hidden)', { timeout: 10000 });
     await page.waitForFunction(() => (document.querySelector('#sync-indicator')?.textContent || '').includes('Synced'), null, { timeout: 20000 });
@@ -105,10 +107,12 @@ async function main() {
     await page.selectOption('#na-dept', { index: 1 });
     await page.selectOption('#na-aud', { index: 0 });
     await page.fill('#na-date', scheduleDate);
+    const plannedBefore = await page.evaluate(() => JSON.parse(localStorage.getItem('ap_planned_audits') || '[]').length);
     await page.click('#schedule-audit-btn');
-    await page.waitForFunction(() => JSON.parse(localStorage.getItem('ap_planned_audits') || '[]').length === 1, null, { timeout: 10000 });
+    await page.waitForFunction(count => JSON.parse(localStorage.getItem('ap_planned_audits') || '[]').length === count + 1, plannedBefore, { timeout: 10000 });
     if (!(await page.locator('#planning-list').innerText()).includes('Pre-Sales')) issues.push('Scheduled audit did not appear in planning list');
-    if (!/audit/i.test(await page.locator('#cal-grid').innerText())) issues.push('Scheduled audit did not appear on calendar');
+    await page.waitForFunction(() => /audit/i.test(document.querySelector('#cal-grid')?.innerText || ''), null, { timeout: 10000 })
+      .catch(() => issues.push('Scheduled audit did not appear on calendar'));
 
     await page.click('#planning-list button:has-text("Start")');
     await page.waitForSelector('#ptitle:text("Audit Execution")', { timeout: 10000 });
