@@ -308,7 +308,7 @@ function hasClosureSubmission(finding) {
   if (!finding || typeof finding !== 'object') return false;
   if (String(finding.closureEvidence || '').trim()) return true;
   if (String(finding.closureSubmittedBy || '').trim() || String(finding.closureDate || '').trim()) return true;
-  return Array.isArray(finding.activityLog) && finding.activityLog.some(log => /closure submitted/i.test(String((log && log.action) || '')));
+  return Array.isArray(finding.activityLog) && finding.activityLog.some(log => /(closure submitted|submitted for review)/i.test(String((log && log.action) || '')));
 }
 
 function hasUnreviewedClosureSubmission(finding) {
@@ -319,7 +319,7 @@ function hasUnreviewedClosureSubmission(finding) {
   let decisionIndex = -1;
   logs.forEach((log, index) => {
     const action = String((log && log.action) || '');
-    if (/closure submitted/i.test(action)) submitIndex = index;
+    if (/(closure submitted|submitted for review)/i.test(action)) submitIndex = index;
     if (/closure (accepted|rejected)/i.test(action)) decisionIndex = index;
   });
   return submitIndex > -1 && submitIndex > decisionIndex;

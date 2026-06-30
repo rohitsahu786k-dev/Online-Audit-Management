@@ -555,7 +555,7 @@ input:focus,select:focus,textarea:focus{border-color:var(--brand);background:var
 <!-- CLOSURE MODAL -->
 <div class="mbg hidden" id="m-closure">
   <div class="modal">
-    <div class="mh">📋 Submit Closure Request <button class="btn btn-ghost btn-icon btn-sm" onclick="closeM('m-closure')">✕</button></div>
+    <div class="mh">📋 Submit For Review <button class="btn btn-ghost btn-icon btn-sm" onclick="closeM('m-closure')">✕</button></div>
     <div id="cl-finfo" style="background:var(--bg3);border-radius:7px;padding:8px;font-size:12px;margin-bottom:11px;"></div>
     <div class="mb2"><label class="lbl">Closure Evidence *</label><textarea id="cl-ev" style="height:60px;resize:none;" placeholder="Describe corrective actions taken..."></textarea></div>
     <div class="mb2"><label class="lbl">Before / After Photos</label>
@@ -563,7 +563,7 @@ input:focus,select:focus,textarea:focus{border-color:var(--brand);background:var
       <input type="file" id="cl-fi" multiple accept="image/*" style="display:none" onchange="handleFiles(event,'closure')">
       <div class="uprev" id="cl-prev"></div>
     </div>
-    <div class="flex g2u"><button class="btn btn-ghost" style="flex:1" onclick="closeM('m-closure')">Cancel</button><button class="btn btn-success" style="flex:1" onclick="submitClosure()">Submit Request</button></div>
+    <div class="flex g2u"><button class="btn btn-ghost" style="flex:1" onclick="closeM('m-closure')">Cancel</button><button class="btn btn-success" style="flex:1" onclick="submitClosure()">Submit For Review</button></div>
   </div>
 </div>
 
@@ -705,7 +705,7 @@ function _hasClosureSubmission(f){
   if(String(f.closureEvidence||'').trim())return true;
   if(String(f.closureSubmittedBy||'').trim()||String(f.closureDate||'').trim())return true;
   return Array.isArray(f.activityLog)&&f.activityLog.some(function(log){
-    return /closure submitted/i.test(String((log&&log.action)||''));
+    return /(closure submitted|submitted for review)/i.test(String((log&&log.action)||''));
   });
 }
 function _hasUnreviewedClosureSubmission(f){
@@ -715,7 +715,7 @@ function _hasUnreviewedClosureSubmission(f){
   var submitIdx=-1,decisionIdx=-1;
   logs.forEach(function(log,idx){
     var action=String((log&&log.action)||'');
-    if(/closure submitted/i.test(action))submitIdx=idx;
+    if(/(closure submitted|submitted for review)/i.test(action))submitIdx=idx;
     if(/closure (accepted|rejected)/i.test(action))decisionIdx=idx;
   });
   return submitIdx>-1&&submitIdx>decisionIdx;
@@ -1143,7 +1143,7 @@ const ROLE_ORDER=['admin','auditor','spoc','manager','viewer'];
 const SEV_BADGE={critical:'b-red',major:'b-amber',minor:'b-teal',obs:'b-purple'};
 const SEV_LABEL={critical:'Critical',major:'Major',minor:'Minor',obs:'Observation'};
 const STAT_BADGE={open:'b-red','in-progress':'b-amber',delayed:'b-red',closed:'b-green','pending-closure':'b-purple'};
-const STAT_LABEL={open:'Open','in-progress':'In Progress',delayed:'Delayed',closed:'Closed','pending-closure':'Pending Review'};
+const STAT_LABEL={open:'Open','in-progress':'In Progress',delayed:'Delayed',closed:'Closed','pending-closure':'Submit For Review'};
 const CLAUSE_DESCRIPTIONS={
   '4':'Context of the organization',
   '4.3':'Determining the scope of the quality management system',
@@ -1384,6 +1384,30 @@ function findCapa(key,list){
   return F.find(function(x){return String(x.ref||'')===text;})||
     F.find(function(x){return String(x.id||'')===text;})||
     F.find(function(x){return capaKey(x)===String(key||'');})||null;
+}
+function canReviewCapaStatus(role){
+  role=role||(APP.currentUser&&APP.currentUser.role);
+  return role==='auditor'||role==='admin';
+}
+function capaStatusOptionsForRole(f,role){
+  var ws=findingWorkflowStatus(f);
+  var reviewer=canReviewCapaStatus(role);
+  var allowed=reviewer?['open','in-progress','closed']:['open','in-progress','pending-closure'];
+  var out=[];
+  if(allowed.indexOf(ws)<0&&ws)out.push({value:ws,label:STAT_LABEL[ws]||ws,disabled:true});
+  allowed.forEach(function(s){out.push({value:s,label:STAT_LABEL[s]||s,disabled:false});});
+  return out;
+}
+function renderCapaStatusSelect(key,f,role){
+  var ws=findingWorkflowStatus(f);
+  return `<select onchange="updateCapaStatus('${key}',this.value)">`+capaStatusOptionsForRole(f,role).map(function(opt){
+    return '<option value="'+opt.value+'" '+(ws===opt.value?'selected':'')+' '+(opt.disabled?'disabled':'')+'>'+opt.label+'</option>';
+  }).join('')+'</select>';
+}
+function canSetCapaStatus(status,role){
+  if(status==='delayed')return false;
+  if(canReviewCapaStatus(role))return ['open','in-progress','closed'].indexOf(status)>-1;
+  return ['open','in-progress','pending-closure'].indexOf(status)>-1;
 }
 function touchFinding(f){
   if(f&&typeof f==='object')f.updatedAt=new Date().toISOString();
@@ -1980,7 +2004,7 @@ function buildNav(){
       d.id='ni-'+it.id;
       let bHTML='';
       if(it.badge==='findings'){const _su=APP.currentUser;const n=APP.findings.filter(f=>f.status!=='closed'&&(_su?.role!=='spoc'||f.dept===_su?.dept)&&(_su?.role!=='manager'||managerDeptCodes(_su).includes(f.dept))).length;if(n>0)bHTML=`<span class="nb nb-r">${n}</span>`;}
-      if(it.badge==='capa'){const n=APP.findings.filter(f=>{const ws=findingWorkflowStatus(f);return ws==='pending-closure'||ws==='delayed';}).length;if(n>0)bHTML=`<span class="nb nb-a">${n}</span>`;}
+      if(it.badge==='capa'){const n=APP.findings.filter(f=>{const ws=findingWorkflowStatus(f);return u.role==='auditor'?ws==='pending-closure':(ws==='pending-closure'||ws==='delayed');}).length;if(n>0)bHTML=`<span class="nb nb-a">${n}</span>`;}
       d.innerHTML=`<span class="ico">${icon(it.ico)}</span><span>${it.l}</span>${bHTML}`;
       d.onclick=()=>navigate(it.id);
       nav.appendChild(d);
@@ -2802,7 +2826,7 @@ function renderAnalytics(){
     <div class="card">
       <div class="ch"><span class="dot" style="background:var(--brand)"></span>Findings by Status</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        ${[['Open',F.filter(f=>findingWorkflowStatus(f)==='open').length,'red'],['In Progress',F.filter(f=>findingWorkflowStatus(f)==='in-progress').length,'amber'],['Delayed',F.filter(f=>findingWorkflowStatus(f)==='delayed').length,'red'],['Pending',F.filter(f=>findingWorkflowStatus(f)==='pending-closure').length,'purple'],['Closed',F.filter(f=>findingWorkflowStatus(f)==='closed').length,'green']].map(([l,n,col])=>n>0?`<div style="text-align:center;background:var(--${col}-bg);border:1px solid var(--${col});border-radius:7px;padding:8px 12px;min-width:60px;"><div style="font-size:18px;font-weight:900;color:var(--${col})">${n}</div><div class="txx" style="color:var(--${col})">${l}</div></div>`:'').join('')}
+        ${[['Open',F.filter(f=>findingWorkflowStatus(f)==='open').length,'red'],['In Progress',F.filter(f=>findingWorkflowStatus(f)==='in-progress').length,'amber'],['Delayed',F.filter(f=>findingWorkflowStatus(f)==='delayed').length,'red'],['Submit For Review',F.filter(f=>findingWorkflowStatus(f)==='pending-closure').length,'purple'],['Closed',F.filter(f=>findingWorkflowStatus(f)==='closed').length,'green']].map(([l,n,col])=>n>0?`<div style="text-align:center;background:var(--${col}-bg);border:1px solid var(--${col});border-radius:7px;padding:8px 12px;min-width:60px;"><div style="font-size:18px;font-weight:900;color:var(--${col})">${n}</div><div class="txx" style="color:var(--${col})">${l}</div></div>`:'').join('')}
       </div>
       <div class="txs td mt2">${F.length} total findings across ${new Set(F.map(f=>f.dept)).size} departments</div>
     </div>
@@ -3705,7 +3729,7 @@ function renderFindings(){
       <div style="display:flex;flex-direction:column;gap:3px;"><label class="lbl">Search</label><input id="f-search" placeholder="Any field..." style="min-width:160px;" oninput="APP.findingsSearch=this.value;renderFindingsTable()"></div>
       <div style="display:flex;flex-direction:column;gap:3px;"><label class="lbl">Dept</label><select id="f-dept" onchange="APP.findingsDeptFilter=this.value;renderFindingsTable()"><option value="">All</option>${APP.depts.map(d=>`<option value="${d.code}">${d.name}</option>`).join('')}</select></div>
       <div style="display:flex;flex-direction:column;gap:3px;"><label class="lbl">Severity</label><select id="f-sev" onchange="APP.findingsSevFilter=this.value;renderFindingsTable()"><option value="">All</option><option value="critical">Critical</option><option value="major">Major</option><option value="minor">Minor</option><option value="obs">Observation</option></select></div>
-      <div style="display:flex;flex-direction:column;gap:3px;"><label class="lbl">Status</label><select id="f-status" onchange="APP.findingsStatusFilter=this.value;renderFindingsTable()"><option value="">All</option><option value="open">Open</option><option value="delayed">Delayed</option><option value="pending-closure">Pending Review</option><option value="closed">Closed</option></select></div>
+      <div style="display:flex;flex-direction:column;gap:3px;"><label class="lbl">Status</label><select id="f-status" onchange="APP.findingsStatusFilter=this.value;renderFindingsTable()"><option value="">All</option><option value="open">Open</option><option value="delayed">Delayed</option><option value="pending-closure">Submit For Review</option><option value="closed">Closed</option></select></div>
       <button class="btn btn-ghost btn-sm" onclick="clearFindingsFilters()">Clear</button>
       <button class="btn btn-brand btn-sm" onclick="exportFindingsExcel()">📊 Export</button>
     </div>
@@ -3785,7 +3809,7 @@ function renderCapa(){
   <div class="grid g4 sg">
     <div class="stat"><div class="sl">Total</div><div class="sv">${scoped.length}</div></div>
     <div class="stat"><div class="sl">Overdue</div><div class="sv" style="color:var(--red)">${scoped.filter(f=>findingWorkflowStatus(f)==='delayed').length}</div><div class="sd dd">Escalation active</div></div>
-    <div class="stat"><div class="sl">Pending Review</div><div class="sv" style="color:var(--purple)">${scoped.filter(f=>findingWorkflowStatus(f)==='pending-closure').length}</div></div>
+    <div class="stat"><div class="sl">Submit For Review</div><div class="sv" style="color:var(--purple)">${scoped.filter(f=>findingWorkflowStatus(f)==='pending-closure').length}</div></div>
     <div class="stat"><div class="sl">Closed</div><div class="sv" style="color:var(--green)">${scoped.filter(f=>f.status==='closed').length}</div><div class="sd du">This cycle</div></div>
   </div>
   <div class="grid g21 sg">
@@ -3799,7 +3823,7 @@ function renderCapa(){
         <div class="capa-tools">
           <input id="capa-search" placeholder="Search CAPA no, dept, issue..." oninput="filterCapaList()">
           <select id="capa-dept-filter" onchange="APP.capaDeptFilter=this.value;filterCapaList()"><option value="">All Dept</option>${deptOptions.map(d=>`<option value="${d.code}" ${APP.capaDeptFilter===d.code?'selected':''}>${d.code}</option>`).join('')}</select>
-          <select id="capa-filter" onchange="APP.capaStatusFilter=this.value;filterCapaList()"><option value="" ${!APP.capaStatusFilter?'selected':''}>All status</option><option value="open" ${APP.capaStatusFilter==='open'?'selected':''}>Open</option><option value="in-progress" ${APP.capaStatusFilter==='in-progress'?'selected':''}>In Progress</option><option value="delayed" ${APP.capaStatusFilter==='delayed'?'selected':''}>Delayed</option><option value="pending-closure" ${APP.capaStatusFilter==='pending-closure'?'selected':''}>Pending Review</option><option value="closed" ${APP.capaStatusFilter==='closed'?'selected':''}>Closed</option></select>
+          <select id="capa-filter" onchange="APP.capaStatusFilter=this.value;filterCapaList()"><option value="" ${!APP.capaStatusFilter?'selected':''}>All status</option><option value="open" ${APP.capaStatusFilter==='open'?'selected':''}>Open</option><option value="in-progress" ${APP.capaStatusFilter==='in-progress'?'selected':''}>In Progress</option><option value="delayed" ${APP.capaStatusFilter==='delayed'?'selected':''}>Delayed</option><option value="pending-closure" ${APP.capaStatusFilter==='pending-closure'?'selected':''}>Submit For Review</option><option value="closed" ${APP.capaStatusFilter==='closed'?'selected':''}>Closed</option></select>
         </div>
         <div class="capa-list" id="capa-list">
         ${scoped.map(f=>{var ws=findingWorkflowStatus(f);return`<div class="fcard ${f.sev} capa-item ${capaKey(f)===APP.activeCapaId?'active':''}" data-key="${capaKey(f)}" data-status="${ws||''}" data-dept="${f.dept||''}" data-search="${sanitize([f.ref,f.deptName,f.desc,f.clause].join(' ')).toLowerCase()}" style="cursor:pointer;" onclick="selectCapa('${capaKey(f)}')">
@@ -3836,11 +3860,11 @@ function filterCapaList(){
 function renderCapaDetail(f){
   const role=APP.currentUser?.role;
   const canClose=role==='spoc'||role==='admin';
-  const canReview=role==='auditor'||role==='admin'||(role==='manager'&&canManageFinding(f));
+  const canReview=canReviewCapaStatus(role);
   const key=capaKey(f);
   const ws=findingWorkflowStatus(f);
   const si={open:0,'in-progress':1,delayed:1,'pending-closure':2,submitted:2,closed:3}[ws]||0;
-  const steps=['Logged','In Progress','Pending Review','Closed'];
+  const steps=['Logged','In Progress','Submit For Review','Closed'];
   return`
   <div class="stepper">
     ${steps.map((s,i)=>`<div class="stp"><div style="display:flex;flex-direction:column;align-items:center;"><div class="stpc ${i<si?'done':i===si?'active':''}">${i<si?'✓':i+1}</div><div class="stpl">${s}</div></div></div>${i<steps.length-1?`<div class="stpline ${i<si?'done':''}"></div>`:''}`).join('')}
@@ -3849,11 +3873,11 @@ function renderCapaDetail(f){
     <div class="f7">${f.desc}</div><div class="txs td mt1">${f.deptName} · ${f.clause}</div>
   </div>
   <div class="grid g2 mb2" style="gap:9px;">
-    <div><label class="lbl">Status</label><select onchange="updateCapaStatus('${key}',this.value)">${['open','in-progress','delayed','pending-closure','closed'].map(s=>`<option value="${s}" ${ws===s?'selected':''}>${STAT_LABEL[s]}</option>`).join('')}</select></div>
+    <div><label class="lbl">Status</label>${renderCapaStatusSelect(key,f,role)}</div>
     <div><label class="lbl">Due Date</label><input type="date" value="${f.due||''}" onchange="updateCapaDue('${key}',this.value)"></div>
   </div>
   ${f.closureEvidence?`<div style="background:var(--green-bg);border:1px solid #86efac;border-radius:7px;padding:9px;margin-bottom:11px;">
-    <div class="txs f7 mb1">📋 Closure Evidence Submitted</div><div class="txs tm">${f.closureEvidence}</div>
+    <div class="txs f7 mb1">📋 Closure Evidence Submitted For Review</div><div class="txs tm">${f.closureEvidence}</div>
     ${f.closureFiles?.length?`<div class="evpair mt2">${f.closureFiles.slice(0,2).map((fl,i)=>`<div class="evbox"><div class="evlabel">${i===0?'Before':'After'}</div>${isImageMedia(fl)?`<img src="${mediaUrl(fl)}">`:'<div class="evph">'+mediaIcon(fl)+'</div>'}</div>`).join('')}</div>`:''}
     <div class="txs td mt1">By ${f.closureSubmittedBy||'—'} · ${f.closureDate||'—'}</div>
   </div>`:''}
@@ -3865,7 +3889,7 @@ function renderCapaDetail(f){
   <div class="ch mt2"><span class="dot" style="background:var(--teal)"></span>Activity Log</div>
   ${f.activityLog?.map(l=>`<div class="tli"><div class="tldot" style="background:var(--bg3);">📝</div><div><div class="txs f7">${l.user}: ${l.action}</div><div class="txx td">${l.ts}</div></div></div>`).join('')||''}
   <div class="flex g2u fw mt3">
-    ${canClose&&ws!=='closed'&&ws!=='pending-closure'?`<button class="btn btn-success btn-sm" onclick="openClosureModal('${key}')">Submit Closure</button>`:``}
+    ${canClose&&ws!=='closed'&&ws!=='pending-closure'?`<button class="btn btn-success btn-sm" onclick="openClosureModal('${key}')">Submit For Review</button>`:``}
     ${canReview&&(ws==='pending-closure'||(role==='admin'&&ws!=='closed'))?`<button class="btn btn-primary btn-sm" onclick="openReviewModal('${key}')">Review Closure</button>`:``}
     ${role==='admin'&&ws!=='closed'&&ws!=='pending-closure'?`<button class="btn btn-amber btn-sm" onclick="updateCapaStatus('${key}','closed')">Force Close</button>`:``}
     ${ws==='closed'?badge('b-green','✅ Verified & Closed'):''}
@@ -3891,6 +3915,18 @@ function selectCapa(key){
 }
 function updateCapaStatus(key,status){
   const F=APP.findings;const f=findCapa(key,F);if(!f)return;
+  const role=APP.currentUser?.role;
+  if(status==='pending-closure'&&!canReviewCapaStatus(role)){
+    openClosureModal(key);
+    selectCapa(key);
+    showToast('Add closure evidence to submit for review');
+    return;
+  }
+  if(!canSetCapaStatus(status,role)){
+    selectCapa(key);
+    showToast(status==='delayed'?'Delayed status is applied automatically after due date is missed':'Only Auditor or Master Admin can set this status');
+    return;
+  }
   f.status=status;f.capaStatus=status==='pending-closure'?'submitted':status;f.activityLog=f.activityLog||[];touchFinding(f);
   if(status==='pending-closure'){f.decision=null;f.decisionComments='';f.decisionDate=null;f.auditClosureDate=null;f.closedAt=null;}
   if(status==='closed'){
@@ -3923,9 +3959,9 @@ function submitClosure(){
   f.closureFiles=APP.closureFiles.slice();f.closureSubmittedBy=APP.currentUser?.name;
   f.closureDate=new Date().toLocaleDateString('en-IN');
   f.decision=null;f.decisionComments='';f.decisionDate=null;f.auditClosureDate=null;f.closedAt=null;
-  f.activityLog=f.activityLog||[];touchFinding(f);f.activityLog.push({user:APP.currentUser?.name,action:'Closure submitted',ts:new Date().toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'})});
-  APP.findings=F;APP.activeCapaId=capaKey(f);closeM('m-closure');addNotif('closure','Closure Submitted',`${f.ref}: ${APP.currentUser?.name} submitted closure`,'capa',['admin','auditor']);
-  renderPage('capa');buildNav();showToast('✅ Closure submitted. Awaiting auditor.');
+  f.activityLog=f.activityLog||[];touchFinding(f);f.activityLog.push({user:APP.currentUser?.name,action:'Submitted for review',ts:new Date().toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'})});
+  APP.findings=F;APP.activeCapaId=capaKey(f);closeM('m-closure');addNotif('closure','Submitted For Review',`${f.ref}: ${APP.currentUser?.name} submitted closure for review`,'capa',['admin','auditor']);
+  renderPage('capa');buildNav();showToast('✅ Submitted for review. Awaiting auditor.');
 }
 function openReviewModal(key){
   APP.activeReviewId=key;const f=findCapa(key);
@@ -4653,7 +4689,7 @@ function renderMytasks(){
   let tasks=[];
   if(u.role==='spoc'){const spocDept=u.dept||'';F.filter(f=>f.status!=='closed'&&f.dept===spocDept).forEach(f=>{const due=new Date(f.due);const dl=Math.round((due-today)/86400000);tasks.push({id:capaKey(f),key:capaKey(f),title:'CAPA Action Required: '+f.ref+' - '+(f.desc||'').substring(0,45),type:'capa',status:dl<0?'overdue':dl<=3?'due-soon':'upcoming',dueDate:f.due,dl,pri:f.sev==='critical'?'P1':f.sev==='major'?'P2':'P3',link:'capa'});});}
   if(u.role==='auditor'){F.filter(f=>findingWorkflowStatus(f)==='pending-closure').forEach(f=>{tasks.push({id:capaKey(f),key:capaKey(f),title:'Review Closure: '+f.ref+' ('+f.deptName+')',type:'review',status:'due-soon',dueDate:'ASAP',dl:0,pri:'P1',link:'capa'});});const _pa=LS.get('ap_planned_audits',[])||[];_pa.forEach((a,i)=>{tasks.push({id:'pa_'+i,title:'Execute: '+a.deptName+' - '+a.type,type:'audit',status:'upcoming',dueDate:a.date||'-',dl:3,pri:'P2',link:'execution'});});}
-  if(u.role==='manager'){managerFindings().filter(f=>f.status!=='closed').forEach(f=>{const ws=findingWorkflowStatus(f);const due=new Date(f.due);const dl=Math.round((due-today)/86400000);tasks.push({id:capaKey(f),key:capaKey(f),title:(ws==='pending-closure'?'Review Closure: ':'Manager Follow-up: ')+f.ref+' - '+f.deptName,type:'manager',status:dl<0?'overdue':ws==='pending-closure'?'due-soon':'upcoming',dueDate:f.due||'ASAP',dl,pri:f.sev==='critical'?'P1':f.sev==='major'?'P2':'P3',link:ws==='pending-closure'?'managerpanel':'capa'});});}
+  if(u.role==='manager'){managerFindings().filter(f=>f.status!=='closed').forEach(f=>{const ws=findingWorkflowStatus(f);const due=new Date(f.due);const dl=Math.round((due-today)/86400000);tasks.push({id:capaKey(f),key:capaKey(f),title:'Manager Follow-up: '+f.ref+' - '+f.deptName,type:'manager',status:dl<0?'overdue':ws==='pending-closure'?'due-soon':'upcoming',dueDate:f.due||'ASAP',dl,pri:f.sev==='critical'?'P1':f.sev==='major'?'P2':'P3',link:'capa'});});}
   if(u.role==='admin'){F.filter(f=>f.status!=='closed').forEach(f=>{const due=new Date(f.due);const dl=Math.round((due-today)/86400000);tasks.push({id:capaKey(f),key:capaKey(f),title:'CAPA: '+f.ref+' - '+f.deptName+' (SPOC resp.)',type:'capa',status:dl<0?'overdue':dl<=3?'due-soon':'upcoming',dueDate:f.due,dl,pri:f.sev==='critical'?'P1':f.sev==='major'?'P2':'P3',link:'capa'});});F.filter(f=>findingWorkflowStatus(f)==='pending-closure').forEach(f=>{tasks.push({id:'rev_'+capaKey(f),key:capaKey(f),title:'Review Closure: '+f.ref,type:'review',status:'due-soon',dueDate:'ASAP',dl:0,pri:'P1',link:'capa'});});}
   if(u.role==='viewer'){tasks=[{id:'tv1',title:'Review Compliance Dashboard',type:'review',status:'upcoming',dueDate:'—',dl:10,pri:'P3',link:'dashboard'}];}
   const overdue=tasks.filter(t=>t.status==='overdue').length,ds=tasks.filter(t=>t.status==='due-soon').length;
