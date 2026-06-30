@@ -305,6 +305,12 @@ function hasReviewDecision(finding) {
   return decision === 'accept' || decision === 'reject';
 }
 
+function isReviewedOrClosedFinding(finding) {
+  return hasReviewDecision(finding)
+    || String((finding && finding.status) || '').toLowerCase() === 'closed'
+    || String((finding && finding.capaStatus) || '').toLowerCase() === 'closed';
+}
+
 function parseAuditTimestamp(value) {
   const raw = String(value || '').trim();
   if (!raw) return 0;
@@ -328,6 +334,10 @@ function isClosureSubmissionAction(action) {
 
 function isReviewDecisionAction(action) {
   return /closure (accepted|rejected)/i.test(String(action || ''));
+}
+
+function isManualStatusAction(action) {
+  return /status\s*(?:→|->|â†’)/i.test(String(action || ''));
 }
 
 function latestWorkflowSignal(finding, fields, actionMatch) {
@@ -379,6 +389,14 @@ function reviewDecisionSignal(finding) {
   );
 }
 
+function statusChangeSignal(finding) {
+  return latestWorkflowSignal(
+    finding,
+    ['statusChangedAt'],
+    isManualStatusAction
+  );
+}
+
 function hasClosureSubmission(finding) {
   if (!finding || typeof finding !== 'object') return false;
   if (String(finding.closureEvidence || '').trim()) return true;
@@ -402,6 +420,18 @@ function isPendingReviewFinding(finding) {
   const status = String((finding && finding.status) || '').toLowerCase();
   const capaStatus = String((finding && finding.capaStatus) || '').toLowerCase();
   return status === 'pending-closure' || capaStatus === 'submitted' || (status === 'delayed' && hasUnreviewedClosureSubmission(finding));
+}
+
+function submissionNewerThanReview(submitted, reviewed) {
+  const submit = closureSubmissionSignal(submitted);
+  const review = reviewDecisionSignal(reviewed);
+  return Boolean(submit.time && review.time && submit.time > review.time);
+}
+
+function statusChangeNewerThanReview(changed, reviewed) {
+  const statusChange = statusChangeSignal(changed);
+  const review = reviewDecisionSignal(reviewed);
+  return Boolean(statusChange.time && review.time && statusChange.time > review.time);
 }
 
 function normalizeFindingSyncState(finding) {
@@ -473,6 +503,28 @@ function withMergedActivityLogs(selected, other) {
     : Object.assign({}, selected, { activityLog: logs });
 }
 
+function mergeFindingWorkflowData(selected, other) {
+  if (!selected || !other) return selected;
+  let out = withMergedActivityLogs(selected, other);
+  let changed = out !== selected;
+  const hasValue = value => (Array.isArray(value) ? value.length > 0 : String(value == null ? '' : value).trim() !== '');
+  const copyMissing = field => {
+    if (!hasValue(out[field]) && hasValue(other[field])) {
+      if (!changed) {
+        out = { ...out };
+        changed = true;
+      }
+      out[field] = Array.isArray(other[field]) ? other[field].slice() : other[field];
+    }
+  };
+
+  ['closureEvidence', 'closureSubmittedBy', 'closureDate', 'closureSubmittedAt', 'closureSubmitAt'].forEach(copyMissing);
+  if (isReviewedOrClosedFinding(out) && isReviewedOrClosedFinding(other) && !isPendingReviewFinding(out)) {
+    ['decision', 'decisionComments', 'decisionDate', 'decisionAt', 'auditClosureDate', 'closedAt'].forEach(copyMissing);
+  }
+  return out;
+}
+
 function chooseFindingForSync(current, incoming) {
   current = normalizeFindingSyncState(current);
   incoming = normalizeFindingSyncState(incoming);
@@ -481,30 +533,38 @@ function chooseFindingForSync(current, incoming) {
 
   const currentPending = isPendingReviewFinding(current);
   const incomingPending = isPendingReviewFinding(incoming);
+  const currentReviewed = isReviewedOrClosedFinding(current);
+  const incomingReviewed = isReviewedOrClosedFinding(incoming);
   if (currentPending || incomingPending) {
-    const currentReviewed = hasReviewDecision(current) || String(current.status || '').toLowerCase() === 'closed';
-    const incomingReviewed = hasReviewDecision(incoming) || String(incoming.status || '').toLowerCase() === 'closed';
-    if (currentPending && !incomingPending && !incomingReviewed) return withMergedActivityLogs(current, incoming);
-    if (incomingPending && !currentPending && !currentReviewed) return withMergedActivityLogs(incoming, current);
+    if (currentPending && incomingReviewed) return submissionNewerThanReview(current, incoming) ? mergeFindingWorkflowData(current, incoming) : mergeFindingWorkflowData(incoming, current);
+    if (incomingPending && currentReviewed) return submissionNewerThanReview(incoming, current) ? mergeFindingWorkflowData(incoming, current) : mergeFindingWorkflowData(current, incoming);
+    if (currentPending && !incomingPending && !incomingReviewed) return mergeFindingWorkflowData(current, incoming);
+    if (incomingPending && !currentPending && !currentReviewed) return mergeFindingWorkflowData(incoming, current);
     if (currentPending && incomingPending) {
       const currentTime = workflowMeaningfulTime(current);
       const incomingTime = workflowMeaningfulTime(incoming);
-      return withMergedActivityLogs(incomingTime > currentTime ? incoming : current, incomingTime > currentTime ? current : incoming);
+      return mergeFindingWorkflowData(incomingTime > currentTime ? incoming : current, incomingTime > currentTime ? current : incoming);
     }
+  }
+
+  if (currentReviewed && !incomingReviewed) {
+    return statusChangeNewerThanReview(incoming, current)
+      ? mergeFindingWorkflowData(incoming, current)
+      : mergeFindingWorkflowData(current, incoming);
+  }
+  if (incomingReviewed && !currentReviewed) {
+    return statusChangeNewerThanReview(current, incoming)
+      ? mergeFindingWorkflowData(current, incoming)
+      : mergeFindingWorkflowData(incoming, current);
   }
 
   const currentTime = findingUpdatedTime(current);
   const incomingTime = findingUpdatedTime(incoming);
   if (currentTime || incomingTime) {
-    return incomingTime >= currentTime ? incoming : current;
+    return mergeFindingWorkflowData(incomingTime >= currentTime ? incoming : current, incomingTime >= currentTime ? current : incoming);
   }
 
-  const currentReviewed = hasReviewDecision(current) || String(current.status || '').toLowerCase() === 'closed';
-  const incomingReviewed = hasReviewDecision(incoming) || String(incoming.status || '').toLowerCase() === 'closed';
-  if (currentReviewed && isPendingReviewFinding(incoming) && !incomingReviewed) return current;
-  if (incomingReviewed && isPendingReviewFinding(current) && !currentReviewed) return incoming;
-
-  return incoming;
+  return mergeFindingWorkflowData(incoming, current);
 }
 
 function mergeFindingsForSync(currentValue, incomingValue) {

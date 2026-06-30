@@ -700,6 +700,9 @@ function _hasReviewDecision(f){
   var d=String((f&&f.decision)||'').toLowerCase();
   return d==='accept'||d==='reject';
 }
+function _isReviewedOrClosedFinding(f){
+  return _hasReviewDecision(f)||String((f&&f.status)||'').toLowerCase()==='closed'||String((f&&f.capaStatus)||'').toLowerCase()==='closed';
+}
 function _parseAuditTimestamp(v){
   var raw=String(v||'').trim();
   if(!raw)return 0;
@@ -718,6 +721,9 @@ function _isClosureSubmissionAction(action){
 }
 function _isReviewDecisionAction(action){
   return /closure (accepted|rejected)/i.test(String(action||''));
+}
+function _isManualStatusAction(action){
+  return /status\s*(?:→|->|â†’)/i.test(String(action||''));
 }
 function _latestWorkflowSignal(f,fields,matchFn){
   var signal={exists:false,time:0,index:-1};
@@ -750,6 +756,9 @@ function _closureSubmissionSignal(f){
 function _reviewDecisionSignal(f){
   return _latestWorkflowSignal(f,['decisionAt','reviewedAt','decisionDate','auditClosureDate','closedAt'],_isReviewDecisionAction);
 }
+function _statusChangeSignal(f){
+  return _latestWorkflowSignal(f,['statusChangedAt'],_isManualStatusAction);
+}
 function _hasClosureSubmission(f){
   if(!f||typeof f!=='object')return false;
   if(String(f.closureEvidence||'').trim())return true;
@@ -770,6 +779,16 @@ function _hasUnreviewedClosureSubmission(f){
 function _isPendingReviewFinding(f){
   return findingWorkflowStatus(f)==='pending-closure';
 }
+function _submissionNewerThanReview(submitted,reviewed){
+  var s=_closureSubmissionSignal(submitted),r=_reviewDecisionSignal(reviewed);
+  if(s.time&&r.time)return s.time>r.time;
+  return false;
+}
+function _statusChangeNewerThanReview(changed,reviewed){
+  var s=_statusChangeSignal(changed),r=_reviewDecisionSignal(reviewed);
+  if(s.time&&r.time)return s.time>r.time;
+  return false;
+}
 function findingWorkflowStatus(f){
   if(!f||typeof f!=='object')return '';
   var status=String(f.status||'').toLowerCase();
@@ -785,23 +804,22 @@ function _chooseFindingForSync(local,remote){
   local=normalizeFindingSyncObject(local);
   remote=normalizeFindingSyncObject(remote);
   var lp=_isPendingReviewFinding(local),rp=_isPendingReviewFinding(remote);
+  var lr=_isReviewedOrClosedFinding(local),rr=_isReviewedOrClosedFinding(remote);
   if(lp||rp){
-    var lr0=_hasReviewDecision(local)||String(local.status||'').toLowerCase()==='closed';
-    var rr0=_hasReviewDecision(remote)||String(remote.status||'').toLowerCase()==='closed';
-    if(lp&&!rp&&!rr0)return _withMergedFindingLogs(local,remote);
-    if(rp&&!lp&&!lr0)return _withMergedFindingLogs(remote,local);
+    if(lp&&rr)return _submissionNewerThanReview(local,remote)?_mergeFindingWorkflowData(local,remote):_mergeFindingWorkflowData(remote,local);
+    if(rp&&lr)return _submissionNewerThanReview(remote,local)?_mergeFindingWorkflowData(remote,local):_mergeFindingWorkflowData(local,remote);
+    if(lp&&!rp&&!rr)return _mergeFindingWorkflowData(local,remote);
+    if(rp&&!lp&&!lr)return _mergeFindingWorkflowData(remote,local);
     if(lp&&rp){
       var lm=_workflowMeaningfulTime(local),rm=_workflowMeaningfulTime(remote);
-      return _withMergedFindingLogs(rm>lm?remote:local,rm>lm?local:remote);
+      return _mergeFindingWorkflowData(rm>lm?remote:local,rm>lm?local:remote);
     }
   }
+  if(lr&&!rr)return _statusChangeNewerThanReview(remote,local)?_mergeFindingWorkflowData(remote,local):_mergeFindingWorkflowData(local,remote);
+  if(rr&&!lr)return _statusChangeNewerThanReview(local,remote)?_mergeFindingWorkflowData(local,remote):_mergeFindingWorkflowData(remote,local);
   var lt=_findingSyncTime(local),rt=_findingSyncTime(remote);
-  if(lt||rt)return rt>=lt?remote:local;
-  var lr=_hasReviewDecision(local)||String(local.status||'').toLowerCase()==='closed';
-  var rr=_hasReviewDecision(remote)||String(remote.status||'').toLowerCase()==='closed';
-  if(lr&&_isPendingReviewFinding(remote)&&!rr)return local;
-  if(rr&&_isPendingReviewFinding(local)&&!lr)return remote;
-  return remote;
+  if(lt||rt)return _mergeFindingWorkflowData(rt>=lt?remote:local,rt>=lt?local:remote);
+  return _mergeFindingWorkflowData(remote,local);
 }
 function _workflowMeaningfulTime(f){
   return Math.max(_findingSyncTime(f),_closureSubmissionSignal(f).time||0,_reviewDecisionSignal(f).time||0);
@@ -822,6 +840,24 @@ function _withMergedFindingLogs(selected,other){
   var logs=_mergeFindingLogs(selected,other);
   if(logs.length===(Array.isArray(selected.activityLog)?selected.activityLog.length:0))return selected;
   return Object.assign({},selected,{activityLog:logs});
+}
+function _mergeFindingWorkflowData(selected,other){
+  if(!selected||!other)return selected;
+  var out=_withMergedFindingLogs(selected,other);
+  var changed=out!==selected;
+  var reviewedSelected=_isReviewedOrClosedFinding(out),reviewedOther=_isReviewedOrClosedFinding(other);
+  function has(v){return Array.isArray(v)?v.length>0:String(v==null?'':v).trim()!=='';}
+  function copyMissing(field){
+    if(!has(out[field])&&has(other[field])){
+      if(!changed){out=Object.assign({},out);changed=true;}
+      out[field]=Array.isArray(other[field])?other[field].slice():other[field];
+    }
+  }
+  ['closureEvidence','closureSubmittedBy','closureDate','closureSubmittedAt','closureSubmitAt'].forEach(copyMissing);
+  if(reviewedSelected&&reviewedOther&&!_isPendingReviewFinding(out)){
+    ['decision','decisionComments','decisionDate','decisionAt','auditClosureDate','closedAt'].forEach(copyMissing);
+  }
+  return out;
 }
 function normalizeFindingSyncObject(f){
   if(!f||typeof f!=='object')return f;
@@ -1613,7 +1649,7 @@ function capaStatusOptionsForRole(f,role){
 }
 function renderCapaStatusSelect(key,f,role){
   var ws=findingWorkflowStatus(f);
-  return `<select onchange="updateCapaStatus('${key}',this.value)">`+capaStatusOptionsForRole(f,role).map(function(opt){
+  return `<select onchange="updateCapaStatus('${key}',this.value,this)">`+capaStatusOptionsForRole(f,role).map(function(opt){
     return '<option value="'+opt.value+'" '+(ws===opt.value?'selected':'')+' '+(opt.disabled?'disabled':'')+'>'+opt.label+'</option>';
   }).join('')+'</select>';
 }
@@ -1625,6 +1661,13 @@ function canSetCapaStatus(status,role){
 function touchFinding(f){
   if(f&&typeof f==='object')f.updatedAt=new Date().toISOString();
   return f;
+}
+function renderCapaActivityLog(f){
+  var logs=Array.isArray(f&&f.activityLog)?f.activityLog.slice().reverse():[];
+  if(!logs.length)return '<div class="txs td" style="padding:8px 0;">No activity yet</div>';
+  return logs.map(function(l){
+    return `<div class="tli"><div class="tldot" style="background:var(--bg3);">i</div><div><div class="txs f7">${sanitize(l&&l.user||'System')}: ${sanitize(l&&l.action||'Updated')}</div><div class="txx td">${sanitize(l&&l.ts||'')}</div></div></div>`;
+  }).join('');
 }
 function openCapa(key){
   APP.activeCapaId=key;
@@ -2456,8 +2499,9 @@ function processOverdueFindings(opts){
   var next=list.map(function(f){
     if(!f||typeof f!=='object')return f;
     var status=String(f.status||'open').toLowerCase();
+    var capaStatus=String(f.capaStatus||'').toLowerCase();
     if(status==='closed'||!isFindingPastDue(f))return f;
-    if(findingWorkflowStatus(f)==='pending-closure')return f;
+    if(status==='pending-closure'||capaStatus==='submitted'||findingWorkflowStatus(f)==='pending-closure'||_hasUnreviewedClosureSubmission(f))return f;
     var item=Object.assign({},f);
     if(status!=='delayed'){
       item.previousStatusBeforeDelay=f.status||'open';
@@ -4101,7 +4145,7 @@ function renderCapaDetail(f){
     ${f.decisionComments?`<div class="txs td mt1">${f.decisionComments}</div>`:''}
   </div>`:''}
   <div class="ch mt2"><span class="dot" style="background:var(--teal)"></span>Activity Log</div>
-  ${f.activityLog?.map(l=>`<div class="tli"><div class="tldot" style="background:var(--bg3);">📝</div><div><div class="txs f7">${l.user}: ${l.action}</div><div class="txx td">${l.ts}</div></div></div>`).join('')||''}
+  ${renderCapaActivityLog(f)}
   <div class="flex g2u fw mt3">
     ${canClose&&ws!=='closed'&&ws!=='pending-closure'?`<button class="btn btn-success btn-sm" onclick="openClosureModal('${key}')">Submit For Review</button>`:``}
     ${canReview&&(ws==='pending-closure'||(role==='admin'&&ws!=='closed'))?`<button class="btn btn-primary btn-sm" onclick="openReviewModal('${key}')">Review Closure</button>`:``}
@@ -4127,7 +4171,7 @@ function selectCapa(key){
     item.classList.toggle('active',item.dataset.key===key);
   });
 }
-function updateCapaStatus(key,status){
+function updateCapaStatus(key,status,selectEl){
   const F=APP.findings;const f=findCapa(key,F);if(!f)return;
   const role=APP.currentUser?.role;
   if(status==='pending-closure'&&!canReviewCapaStatus(role)){
@@ -4138,10 +4182,12 @@ function updateCapaStatus(key,status){
   }
   if(!canSetCapaStatus(status,role)){
     selectCapa(key);
+    if(selectEl)selectEl.value=findingWorkflowStatus(f);
     showToast(status==='delayed'?'Delayed status is applied automatically after due date is missed':'Only Auditor or Master Admin can set this status');
     return;
   }
   f.status=status;f.capaStatus=status==='pending-closure'?'submitted':status;f.activityLog=f.activityLog||[];touchFinding(f);
+  f.statusChangedAt=f.updatedAt;
   if(status==='pending-closure'){f.decision=null;f.decisionComments='';f.decisionDate=null;f.auditClosureDate=null;f.closedAt=null;}
   if(status==='closed'){
     if(!f.auditClosureDate)f.auditClosureDate=todayInputValue();
@@ -4151,7 +4197,7 @@ function updateCapaStatus(key,status){
   }
   f.activityLog.push({user:APP.currentUser?.name||'System',action:'Status → '+STAT_LABEL[status],ts:new Date().toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'})});
   APP.findings=F;APP.activeCapaId=capaKey(f);addNotif('capa','CAPA Updated',`${f.ref} -> ${STAT_LABEL[status]}`,'capa',['admin','auditor','spoc']);
-  if(status==='closed')renderPage('capa');else selectCapa(APP.activeCapaId);
+  renderPage('capa');
   showToast('Status updated: '+STAT_LABEL[status]);buildNav();
 }
 function updateCapaDue(key,due){
