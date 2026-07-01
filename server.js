@@ -5,6 +5,7 @@ require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const crypto = require('crypto');
+const https = require('https');
 const { MongoClient } = require('mongodb');
 const nodemailer = require('nodemailer');
 
@@ -18,9 +19,9 @@ const SMTP_SECURE = String(process.env.SMTP_SECURE || 'true').toLowerCase() === 
 const SMTP_USER = process.env.SMTP_USER;
 const SMTP_PASS = process.env.SMTP_PASS;
 const SMTP_FROM = process.env.SMTP_FROM || (SMTP_USER ? `OnePWS AuditPro <${SMTP_USER}>` : undefined);
-const AUTH_TOKEN_TTL_MS = Number(process.env.AUTH_TOKEN_TTL_MS || 12 * 60 * 60 * 1000);
-const AUTH_SECRET = process.env.AUTH_SECRET || crypto.createHash('sha256')
-  .update([MONGODB_URI || '', SMTP_PASS || '', MONGODB_DB, 'onepws-auditpro-auth'].join('|'))
+const AUTH_TOKEN_TTL_MS = Number(process.env.AUTH_TOKEN_TTL_MS || 7 * 24 * 60 * 60 * 1000);
+const AUTH_SECRET = process.env.AUTH_SECRET || process.env.SESSION_SECRET || crypto.createHash('sha256')
+  .update([MONGODB_DB, 'onepws-auditpro-auth-v2'].join('|'))
   .digest('hex');
 const PASSWORD_HASH_ITERATIONS = Number(process.env.PASSWORD_HASH_ITERATIONS || 120000);
 
@@ -214,6 +215,50 @@ function cloudinarySignature(params, secret) {
   return crypto.createHash('sha1').update(payload + secret).digest('hex');
 }
 
+function cloudinaryPostMultipart(endpoint, fields) {
+  const boundary = `----auditpro-${crypto.randomBytes(12).toString('hex')}`;
+  const chunks = [];
+  Object.entries(fields || {}).forEach(([key, value]) => {
+    if (value === undefined || value === null) return;
+    chunks.push(Buffer.from(`--${boundary}\r\n`));
+    chunks.push(Buffer.from(`Content-Disposition: form-data; name="${key}"\r\n\r\n`));
+    chunks.push(Buffer.from(String(value)));
+    chunks.push(Buffer.from('\r\n'));
+  });
+  chunks.push(Buffer.from(`--${boundary}--\r\n`));
+  const body = Buffer.concat(chunks);
+  const url = new URL(endpoint);
+
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      method: 'POST',
+      hostname: url.hostname,
+      path: `${url.pathname}${url.search}`,
+      headers: {
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': body.length
+      },
+      timeout: 30000
+    }, res => {
+      const parts = [];
+      res.on('data', chunk => parts.push(chunk));
+      res.on('end', () => {
+        const text = Buffer.concat(parts).toString('utf8');
+        let data = {};
+        try {
+          data = text ? JSON.parse(text) : {};
+        } catch (_err) {
+          data = { raw: text };
+        }
+        resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode || 502, data });
+      });
+    });
+    req.on('timeout', () => req.destroy(new Error('Cloudinary request timed out')));
+    req.on('error', reject);
+    req.end(body);
+  });
+}
+
 function mediaTypeFromUpload(upload) {
   if (!upload) return 'document';
   if (upload.resource_type === 'image') return 'image';
@@ -255,18 +300,14 @@ async function destroyCloudinaryAsset(publicId, resourceType) {
 
   const timestamp = Math.floor(Date.now() / 1000);
   const params = { public_id: publicId, timestamp };
-  const form = new FormData();
-  form.append('public_id', publicId);
-  form.append('timestamp', String(timestamp));
-  form.append('api_key', cfg.apiKey);
-  form.append('signature', cloudinarySignature(params, cfg.apiSecret));
-
   const type = resourceType || 'image';
-  const response = await fetch(getCloudinaryEndpoint(cfg, type, 'destroy'), {
-    method: 'POST',
-    body: form
+  const response = await cloudinaryPostMultipart(getCloudinaryEndpoint(cfg, type, 'destroy'), {
+    public_id: publicId,
+    timestamp,
+    api_key: cfg.apiKey,
+    signature: cloudinarySignature(params, cfg.apiSecret)
   });
-  const data = await response.json().catch(() => ({}));
+  const data = response.data || {};
   if (!response.ok || data.error) {
     const err = new Error(data.error && data.error.message ? data.error.message : 'Cloudinary delete failed');
     err.statusCode = response.status || 502;
@@ -1534,20 +1575,16 @@ app.get('/api/media/status', wrapAsync(async (_req, res) => {
     public_id: 'connection-test',
     timestamp
   };
-  const form = new FormData();
-  form.append('file', 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==');
-  form.append('folder', params.folder);
-  form.append('overwrite', params.overwrite);
-  form.append('public_id', params.public_id);
-  form.append('timestamp', String(timestamp));
-  form.append('api_key', cfg.apiKey);
-  form.append('signature', cloudinarySignature(params, cfg.apiSecret));
-
-  const response = await fetch(getCloudinaryEndpoint(cfg, 'auto', 'upload'), {
-    method: 'POST',
-    body: form
+  const response = await cloudinaryPostMultipart(getCloudinaryEndpoint(cfg, 'auto', 'upload'), {
+    file: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==',
+    folder: params.folder,
+    overwrite: params.overwrite,
+    public_id: params.public_id,
+    timestamp,
+    api_key: cfg.apiKey,
+    signature: cloudinarySignature(params, cfg.apiSecret)
   });
-  const upload = await response.json().catch(() => ({}));
+  const upload = response.data || {};
   if (!response.ok || upload.error) {
     return res.status(response.status || 502).json({
       ok: false,
@@ -1588,18 +1625,14 @@ app.post('/api/media/upload', wrapAsync(async (req, res) => {
   const timestamp = Math.floor(Date.now() / 1000);
   const folder = `onepws-auditpro/${moduleName.replace(/[^a-z0-9_-]+/gi, '-').toLowerCase()}`;
   const signed = { folder, timestamp };
-  const form = new FormData();
-  form.append('file', file);
-  form.append('folder', folder);
-  form.append('timestamp', String(timestamp));
-  form.append('api_key', cfg.apiKey);
-  form.append('signature', cloudinarySignature(signed, cfg.apiSecret));
-
-  const response = await fetch(getCloudinaryEndpoint(cfg, 'auto', 'upload'), {
-    method: 'POST',
-    body: form
+  const response = await cloudinaryPostMultipart(getCloudinaryEndpoint(cfg, 'auto', 'upload'), {
+    file,
+    folder,
+    timestamp,
+    api_key: cfg.apiKey,
+    signature: cloudinarySignature(signed, cfg.apiSecret)
   });
-  const upload = await response.json().catch(() => ({}));
+  const upload = response.data || {};
   if (!response.ok || upload.error) {
     return res.status(response.status || 502).json({ ok: false, error: upload.error && upload.error.message ? upload.error.message : 'Cloudinary upload failed' });
   }

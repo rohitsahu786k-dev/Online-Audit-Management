@@ -647,7 +647,8 @@ var SYNC_KEYS=['ap_users','ap_depts','ap_auds','ap_cps','ap_finds','ap_learns','
 var LOCAL_STORAGE_BACKUP_KEY='ap_local_storage_backup';
 var PENDING_SYNC_KEY='ap_pending_sync_queue';
 var AUTH_TOKEN_KEY='ap_auth_token';
-var LOCAL_SYNC_EXCLUDE_KEYS={ap_rem_p:1,ap_auth_token:1,ap_local_storage_backup:1,ap_pending_sync_queue:1};
+var AUTH_EXPIRES_KEY='ap_auth_expires_at';
+var LOCAL_SYNC_EXCLUDE_KEYS={ap_rem_p:1,ap_auth_token:1,ap_auth_expires_at:1,ap_local_storage_backup:1,ap_pending_sync_queue:1};
 var _myWrites={};
 var _syncStatus='connecting';
 
@@ -678,13 +679,52 @@ function _apiFetch(path,opts){
   opts=opts||{};
   opts.headers=Object.assign({'Content-Type':'application/json'},opts.headers||{});
   var token=LS.get(AUTH_TOKEN_KEY,'');
+  if(_isProtectedApiPath(path)&&!_hasUsableAuthToken()){
+    return Promise.reject(_apiError('Authentication required',401));
+  }
   if(token&&!opts.headers.Authorization)opts.headers.Authorization='Bearer '+token;
   return fetch(API_BASE+path,opts).then(function(res){
     return res.json().catch(function(){return {};}).then(function(data){
-      if(!res.ok||data.ok===false)throw new Error(data.error||('HTTP '+res.status));
+      if(!res.ok||data.ok===false)throw _apiError(data.error||('HTTP '+res.status),res.status);
       return data;
     });
   });
+}
+
+function _apiError(message,status){
+  var err=new Error(message||'Request failed');
+  err.status=status||0;
+  return err;
+}
+
+function _isProtectedApiPath(path){
+  var p=String(path||'').split('?')[0];
+  return p.indexOf('/api/')===0
+    && p!=='/api/health'
+    && p!=='/api/auth/login'
+    && p!=='/api/auth/forgot-password'
+    && p!=='/api/auth/reset-password';
+}
+
+function _hasUsableAuthToken(){
+  var token=LS.get(AUTH_TOKEN_KEY,'');
+  if(!token)return false;
+  var expiresAt=Number(LS.get(AUTH_EXPIRES_KEY,0)||0);
+  if(expiresAt&&Date.now()>expiresAt){
+    _clearAuthState(false);
+    return false;
+  }
+  return true;
+}
+
+function _clearAuthState(showLogin){
+  APP._cu=null;
+  try{localStorage.removeItem('ap_cu');localStorage.removeItem(AUTH_TOKEN_KEY);localStorage.removeItem(AUTH_EXPIRES_KEY);}catch(e){}
+  _stopApiSync();
+  if(showLogin&&document.getElementById('login-screen')){
+    var appEl=el('app');if(appEl)appEl.classList.add('hidden');
+    el('login-screen').style.display='flex';
+  }
 }
 
 function _localSyncExists(k){
@@ -720,7 +760,7 @@ function _collectLocalSyncItems(keys){
     var value=_sanitizeSyncData(k,LS.get(k,null));
     items[k]=_stripPhotos(k,value);
   });
-  return items;
+  return _filterSyncItemsForAuth(items);
 }
 function _pendingSyncItems(){
   try{
@@ -738,6 +778,7 @@ function _savePendingSyncItems(items){
 }
 function _queueSyncItem(k,v){
   if(SYNC_KEYS.indexOf(k)<0||k===LOCAL_STORAGE_BACKUP_KEY)return;
+  if(!_canWriteSyncKey(k))return;
   if(k==='ap_users'&&JSON.stringify(v||{}).indexOf('"password"')>-1)return;
   var items=_pendingSyncItems();
   items[k]=_stripPhotos(k,_sanitizeSyncData(k,v));
@@ -746,12 +787,23 @@ function _queueSyncItem(k,v){
 function _mergePendingSyncItems(items){
   var pending=_pendingSyncItems();
   Object.keys(pending).forEach(function(k){
-    if(SYNC_KEYS.indexOf(k)>-1)items[k]=pending[k];
+    if(SYNC_KEYS.indexOf(k)>-1&&_canWriteSyncKey(k))items[k]=pending[k];
   });
-  return items;
+  return _filterSyncItemsForAuth(items);
+}
+function _canWriteSyncKey(k){
+  if(k!=='ap_users'&&k!=='ap_permissions')return true;
+  return !!(typeof APP!=='undefined'&&APP.currentUser&&APP.currentUser.role==='admin');
+}
+function _filterSyncItemsForAuth(items){
+  var filtered={};
+  Object.keys(items||{}).forEach(function(k){
+    if(SYNC_KEYS.indexOf(k)>-1&&_canWriteSyncKey(k))filtered[k]=items[k];
+  });
+  return filtered;
 }
 function _writeSyncKeyNow(k,v,by){
-  if(!_apiReady||SYNC_KEYS.indexOf(k)<0)return Promise.resolve({queued:true});
+  if(!_apiReady||SYNC_KEYS.indexOf(k)<0||!_canWriteSyncKey(k))return Promise.resolve({queued:true});
   var clean=_stripPhotos(k,_sanitizeSyncData(k,v));
   _myWrites[k]=Date.now();
   return _apiFetch('/api/sync/'+encodeURIComponent(k),{
@@ -1222,7 +1274,7 @@ const LS={
   },
   del(k){
     try{localStorage.removeItem(k);}catch(e){}
-    if(_apiReady&&SYNC_KEYS.indexOf(k)>-1){
+    if(_apiReady&&SYNC_KEYS.indexOf(k)>-1&&_canWriteSyncKey(k)){
       _apiFetch('/api/sync/'+encodeURIComponent(k),{method:'DELETE'}).catch(function(e){console.warn('Sync delete:',e.message);});
     }
   },
@@ -1435,8 +1487,17 @@ function saveAS(){APP.session={...AS,at:new Date().toISOString()};saveCurrentAud
 function loadAS(){if(!APP.session)restoreCurrentAuditDraft();const s=APP.session;if(s){AS={answers:s.answers||{},findings:s.findings||{},notes:s.notes||{},genNotes:s.genNotes||''};}}
 // ── MONGODB API SYNC ──
 var _syncInitDone=false;
+var _syncPollTimer=null;
+function _stopApiSync(){
+  _apiReady=false;
+  _syncInitDone=false;
+  if(_syncPollTimer){clearInterval(_syncPollTimer);_syncPollTimer=null;}
+}
+function _isAuthError(err){
+  return err&&(err.status===401||String(err.message||'').toLowerCase().indexOf('authentication required')>-1);
+}
 function initApiSync(){
-  if(!APP.currentUser||!LS.get(AUTH_TOKEN_KEY,''))return;
+  if(!APP.currentUser||!_hasUsableAuthToken()){_stopApiSync();return;}
   if(_syncInitDone)return;
   _syncInitDone=true;
 
@@ -1521,6 +1582,7 @@ function initApiSync(){
       }
     });
 
+    localPushItems=_filterSyncItemsForAuth(localPushItems);
     if(Object.keys(localPushItems).length){
       _mergePendingSyncItems(localPushItems);
       _apiFetch('/api/sync/bulk',{method:'POST',body:JSON.stringify({items:localPushItems,by:(APP.currentUser&&APP.currentUser.loginId)||'browser-local-merge'})}).then(function(){_savePendingSyncItems({});}).catch(function(e){console.warn('Initial local push sync:',e.message);});
@@ -1540,8 +1602,10 @@ function initApiSync(){
     }
 
     _syncStatus='synced';_updateSyncUI();
-    setInterval(pollApiSync,15000);
+    if(_syncPollTimer)clearInterval(_syncPollTimer);
+    _syncPollTimer=setInterval(pollApiSync,15000);
   }).catch(function(err){
+    if(_isAuthError(err)){_clearAuthState(true);return;}
     console.warn('Initial sync failed:',err);
     _syncStatus='offline';_updateSyncUI();
     _syncInitDone=false;
@@ -1549,7 +1613,7 @@ function initApiSync(){
 }
 
 function pollApiSync(){
-  if(!_apiReady)return;
+  if(!_apiReady||!APP.currentUser||!_hasUsableAuthToken()){_stopApiSync();return;}
   _apiFetch('/api/sync').then(function(payload){
     var cloud=payload.data||{};
     Object.keys(cloud).forEach(function(k){
@@ -1616,6 +1680,7 @@ function pollApiSync(){
     flushPendingLocalSync('poll').catch(function(){});
     _syncStatus='synced';_updateSyncUI();
   }).catch(function(err){
+    if(_isAuthError(err)){_clearAuthState(true);return;}
     console.warn('Poll sync failed:',err.message);
     _syncStatus='offline';_updateSyncUI();
   });
@@ -2192,19 +2257,23 @@ function completedAuditKey(audit){
 function derivedCompletedAuditsFromFindings(existing){
   if(typeof APP==='undefined'||!APP.findings)return [];
   var existingKeys=new Set((existing||[]).map(completedAuditKey).filter(Boolean));
+  // Also track existing auditRefs so we never create a derived entry for a known audit
   var existingRefs=new Set((existing||[]).map(function(a){return String(a&&(a.ref||a.auditRef||a.id)||'').trim().toLowerCase();}).filter(Boolean));
   var groups={};
   (APP.findings||[]).forEach(function(f){
     if(!f||!f.dept)return;
     var auditRef=String(f.auditRef||f.auditId||'').trim();
+    // Skip if the auditRef already exists as a completed audit — no need to derive
     if(auditRef&&existingRefs.has(auditRef.toLowerCase()))return;
     var date=f.auditSubmittedAt||f.submittedAt||f.createdAt||f.date||'';
     var d=parseAuditDate(date);
     var day=d?d.toISOString().slice(0,10):String(date||'').slice(0,10);
+    // Use a stable fallback key (never Date.now()) to avoid generating new entries on each call
     var stableDay=day||'nodate';
     var key=f.dept+'|'+(auditRef||('findings-'+stableDay));
     if(!groups[key]){
       var dept=APP.depts.find(function(x){return x.code===f.dept;})||{code:f.dept,name:f.dept};
+      // Only use stable AUTO ref — never timestamp-based to avoid duplicates
       var autoRef=auditRef||('AUTO-'+f.dept+'-'+stableDay);
       groups[key]={dept:f.dept,deptName:f.deptName||dept.name,ref:autoRef,submittedAt:date||'',date:date||'',rows:[]};
     }
@@ -2212,6 +2281,7 @@ function derivedCompletedAuditsFromFindings(existing){
   });
   return Object.keys(groups).map(function(key){
     var g=groups[key];
+    // Skip groups with no valid date — they shouldn't be shown as completed audits
     if(!g.submittedAt)return null;
     var counts=auditFindingCounts(g.rows);
     var audit={id:'derived_'+key.replace(/[^a-z0-9]+/gi,'_').toLowerCase(),ref:g.ref,dept:g.dept,deptName:g.deptName,status:'submitted',submittedAt:g.submittedAt,date:g.date,findingRefs:g.rows.map(function(f){return f.ref;}).filter(Boolean),auditScoreFrozen:scoreFromFindingCounts(counts),auditFindingCountsFrozen:counts,derivedFromFindings:true};
@@ -2583,13 +2653,16 @@ function doLogin(){
   const rem=el('li-rem')?.checked||false;
   if(rem){LS.set('ap_rem_u',uid);}else{LS.del('ap_rem_u');}
   LS.del('ap_rem_p');
+  const btn=document.querySelector('#login-screen button.btn-brand');
+  if(btn)btn.disabled=true;
   _apiFetch('/api/auth/login',{method:'POST',body:JSON.stringify({identity:uid,password:pwd})}).then(function(data){
     LS.set(AUTH_TOKEN_KEY,data.token||'');
+    LS.set(AUTH_EXPIRES_KEY,Date.now()+Number(data.expiresInMs||604800000));
     if(data.user)finishLogin(data.user);
     else showLoginError();
   }).catch(function(e){
     showLoginError(e.message==='Invalid credentials'?'Invalid credentials. Please try again.':'Login failed: '+e.message);
-  });
+  }).finally(function(){if(btn)btn.disabled=false;});
 }
 window.addEventListener('hashchange',()=>{const h=location.hash.slice(1);if(h&&APP.currentUser)navigate(h);});
 document.addEventListener('DOMContentLoaded',()=>{
@@ -2603,14 +2676,16 @@ document.addEventListener('DOMContentLoaded',()=>{
   ['login-logo','sb-logo'].forEach(id=>{const i=el(id);if(i)i.src=logoSrc;});
   // Auto-login from persisted session token
   const saved=APP.currentUser, token=LS.get(AUTH_TOKEN_KEY,'');
-  if(saved&&token){
+  if(saved&&token&&_hasUsableAuthToken()){
     _apiFetch('/api/auth/me').then(function(data){
       const user=data.user||saved;
       el('login-screen').style.display='none';
       el('app').classList.remove('hidden');
       APP.currentUser=user;
       initApp();
-    }).catch(function(){APP.currentUser=null;LS.del(AUTH_TOKEN_KEY);});
+    }).catch(function(e){if(_isAuthError(e))_clearAuthState(true);else showLoginError('Session check failed. Please sign in again.');});
+  }else if(saved||token){
+    _clearAuthState(true);
   }
   // Enter key on login
   ['li-u','li-p'].forEach(id=>el(id)?.addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();}));
@@ -2623,9 +2698,7 @@ document.addEventListener('DOMContentLoaded',()=>{
 
 function doLogout(){
   saveAS();
-  APP.currentUser=null;
-  LS.del('ap_cu');
-  LS.del(AUTH_TOKEN_KEY);
+  _clearAuthState(false);
   el('app').classList.add('hidden');
   el('login-screen').style.display='flex';
   el('li-p').value='';
