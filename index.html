@@ -824,6 +824,62 @@ function _mergeEmailLogs(local,remote){
     .sort(function(a,b){return new Date(b.sentAt||0)-new Date(a.sentAt||0);})
     .slice(0,500);
 }
+function _notifSyncKey(n){
+  if(!n||typeof n!=='object')return '';
+  return n.id||[n.type,n.title,n.body,n.ts].join('|');
+}
+function _notifSyncTime(n){
+  var raw=String((n&&n.ts)||(n&&n.at)||(n&&n.updatedAt)||'').trim();
+  var direct=Date.parse(raw);
+  if(!isNaN(direct))return direct;
+  var m=raw.match(/^(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4}),\s+(\d{1,2}):(\d{2})\s*(am|pm)$/i);
+  if(!m)return 0;
+  var months={jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11};
+  var h=Number(m[4]),ap=m[6].toLowerCase();
+  if(ap==='pm'&&h<12)h+=12;
+  if(ap==='am'&&h===12)h=0;
+  var t=new Date(Number(m[3]),months[m[2].toLowerCase()],Number(m[1]),h,Number(m[5])).getTime();
+  return isNaN(t)?0:t;
+}
+function _mergeNotificationsForSync(local,remote){
+  var byKey={};
+  [].concat(Array.isArray(local)?local:[],Array.isArray(remote)?remote:[]).forEach(function(n){
+    var key=_notifSyncKey(n);
+    if(key)byKey[key]=Object.assign({},byKey[key]||{},n);
+  });
+  return Object.keys(byKey).map(function(k){return byKey[k];})
+    .sort(function(a,b){return _notifSyncTime(b)-_notifSyncTime(a);})
+    .slice(0,600);
+}
+function _completedAuditSyncTime(a){
+  var t=Date.parse((a&&a.updatedAt)||(a&&a.submittedAt)||(a&&a.date)||'');
+  return isNaN(t)?0:t;
+}
+function _completedAuditCompleteness(a){
+  if(!a||typeof a!=='object')return 0;
+  var score=a.auditScoreFrozen!==undefined?1:0;
+  score+=Array.isArray(a.findingRefs)?a.findingRefs.length:0;
+  score+=a.auditFindingCountsFrozen?Number(a.auditFindingCountsFrozen.total||0):0;
+  score+=a.session&&a.session.findings?Object.keys(a.session.findings).length:0;
+  return score;
+}
+function _isBadDerivedCompletedAudit(a){
+  var ref=String((a&&(a.ref||a.auditRef||a.id))||'').trim();
+  var id=String((a&&a.id)||'');
+  return !!(a&&a.derivedFromFindings&&(/^AUTO-[A-Z0-9]+-\d{10,}$/.test(ref)||/^derived_[a-z0-9]+_findings_?$/i.test(id)));
+}
+function _mergeCompletedAuditsForSync(local,remote){
+  var byKey={};
+  [].concat(Array.isArray(local)?local:[],Array.isArray(remote)?remote:[]).forEach(function(a){
+    if(_isBadDerivedCompletedAudit(a))return;
+    var key=completedAuditKey(a);
+    if(!key)return;
+    var prev=byKey[key];
+    if(!prev||_completedAuditSyncTime(a)>_completedAuditSyncTime(prev)||(_completedAuditSyncTime(a)===_completedAuditSyncTime(prev)&&_completedAuditCompleteness(a)>_completedAuditCompleteness(prev)))byKey[key]=a;
+  });
+  var rows=Object.keys(byKey).map(function(k){return byKey[k];}).sort(function(a,b){return _completedAuditSyncTime(a)-_completedAuditSyncTime(b);});
+  return typeof normalizeCompletedAuditsData==='function'?normalizeCompletedAuditsData(rows).value:rows;
+}
 
 function _findingSyncKey(f){
   return String((f&&f.id)||(f&&f.ref)||'').trim();
@@ -839,7 +895,7 @@ function _findingDeletedTime(f){
   return isNaN(t)?0:t;
 }
 function _isDeletedFinding(f){
-  return !!(f&&f.deletedAt);
+  return !!(f&&f.deletedAt)||String((f&&f.status)||'').toLowerCase()==='draft';
 }
 function _hasReviewDecision(f){
   var d=String((f&&f.decision)||'').toLowerCase();
@@ -1396,6 +1452,11 @@ function initApiSync(){
           shouldPushMerged=JSON.stringify(mergedDrafts)!==JSON.stringify(remote);
           remote=mergedDrafts;
         }
+        if(k==='ap_completed_audits'){
+          var mergedAudits=_mergeCompletedAuditsForSync(local,remote);
+          shouldPushMerged=JSON.stringify(mergedAudits)!==JSON.stringify(remote);
+          remote=mergedAudits;
+        }
         if(k==='ap_email_logs'){
           var mergedLogs=_mergeEmailLogs(local,remote);
           if(JSON.stringify(mergedLogs)!==JSON.stringify(remote||[])){
@@ -1403,6 +1464,17 @@ function initApiSync(){
           }
           if(JSON.stringify(mergedLogs)!==JSON.stringify(local||[])){
             localStorage.setItem(k,JSON.stringify(mergedLogs));
+            updated=true;
+          }
+          return;
+        }
+        if(k==='ap_notifs'){
+          var mergedNotifs=_mergeNotificationsForSync(local,remote);
+          if(JSON.stringify(mergedNotifs)!==JSON.stringify(remote||[])){
+            localPushItems[k]=_stripPhotos(k,mergedNotifs);
+          }
+          if(JSON.stringify(mergedNotifs)!==JSON.stringify(local||[])){
+            localStorage.setItem(k,JSON.stringify(mergedNotifs));
             updated=true;
           }
           return;
@@ -1489,10 +1561,31 @@ function pollApiSync(){
           _apiFetch('/api/sync/ap_audit_drafts',{method:'PUT',body:JSON.stringify({value:remote,by:(APP.currentUser&&APP.currentUser.loginId)||'draft-merge'})}).catch(function(e){console.warn('Draft merge sync:',e.message);});
         }
       }
+      if(k==='ap_completed_audits'){
+        var mergedAudits=_mergeCompletedAuditsForSync(local,remote);
+        var auditText=JSON.stringify(mergedAudits);
+        if(auditText!==remoteText){
+          remote=mergedAudits;
+          remoteText=auditText;
+          _apiFetch('/api/sync/ap_completed_audits',{method:'PUT',body:JSON.stringify({value:remote,by:(APP.currentUser&&APP.currentUser.loginId)||'audit-merge'})}).catch(function(e){console.warn('Completed audit merge sync:',e.message);});
+        }
+      }
       if(k==='ap_email_logs'){
         var mergedLogs=_mergeEmailLogs(local,remote);
         if(JSON.stringify(mergedLogs)!==localText){
           localStorage.setItem(k,JSON.stringify(mergedLogs));
+          _refreshAfterSync(k);
+        }
+        return;
+      }
+      if(k==='ap_notifs'){
+        var mergedNotifs=_mergeNotificationsForSync(local,remote);
+        var notifText=JSON.stringify(mergedNotifs);
+        if(notifText!==remoteText){
+          _apiFetch('/api/sync/ap_notifs',{method:'PUT',body:JSON.stringify({value:mergedNotifs,by:(APP.currentUser&&APP.currentUser.loginId)||'notif-merge'})}).catch(function(e){console.warn('Notification merge sync:',e.message);});
+        }
+        if(notifText!==localText){
+          localStorage.setItem(k,notifText);
           _refreshAfterSync(k);
         }
         return;
@@ -1710,19 +1803,28 @@ function compressImage(dataUrl,maxW,maxH,quality,cb){
 function filterByDateRange(items, dateField){
   if(!APP.dateFrom && !APP.dateTo) return items;
   const fields=Array.isArray(dateField)?dateField:String(dateField||'due').split('|');
+  const from=APP.dateFrom?new Date(APP.dateFrom):null;
+  const to=APP.dateTo?new Date(APP.dateTo+'T23:59:59'):null;
   return items.filter(function(item){
-    let d='';
-    for(let i=0;i<fields.length;i++){if(item&&item[fields[i]]){d=item[fields[i]];break;}}
-    if(!d) return true;
-    const itemDate = new Date(d);
-    if(isNaN(itemDate.getTime())) return true;
-    if(APP.dateFrom && itemDate < new Date(APP.dateFrom)) return false;
-    if(APP.dateTo && itemDate > new Date(APP.dateTo + 'T23:59:59')) return false;
-    return true;
+    let sawDate=false;
+    for(let i=0;i<fields.length;i++){
+      const raw=item&&item[fields[i]];
+      if(!raw)continue;
+      const itemDate=new Date(raw);
+      if(isNaN(itemDate.getTime()))continue;
+      sawDate=true;
+      if(from&&itemDate<from)continue;
+      if(to&&itemDate>to)continue;
+      return true;
+    }
+    return !sawDate;
   });
 }
+function findingDateFilterFields(){
+  return ['due','date','createdAt','submittedAt','auditSubmittedAt','closureDate','closureSubmittedAt','decisionDate','decisionAt','auditClosureDate','closedAt','updatedAt'];
+}
 function filteredFindings(){
-  return filterByDateRange(APP.findings,['due','date','createdAt','submittedAt','closureDate','auditClosureDate','decisionDate','closedAt']);
+  return filterByDateRange(APP.findings,findingDateFilterFields());
 }
 function setDateFilter(from,to){APP.dateFrom=from||'';APP.dateTo=to||'';}
 function applyDateFilter(){
@@ -1789,6 +1891,9 @@ function normalizeFindingsData(data){
     if(!Array.isArray(f.closureFiles)){updates.closureFiles=[];changed=true;}
     if(!Array.isArray(f.activityLog)){updates.activityLog=[];changed=true;}
     return Object.keys(updates).length?Object.assign({},f,updates):f;
+  }).filter(function(f){
+    if(String((f&&f.status)||'').toLowerCase()==='draft'&&f&&f.audit&&f.session){changed=true;return false;}
+    return true;
   });
   return{value:value,changed:changed};
 }
@@ -1894,6 +1999,32 @@ function _isAutoDelayActivity(l){
   var action=String(l&&l.action||'').toLowerCase();
   return action.indexOf('auto status changed')>-1||action.indexOf('due date missed')>-1;
 }
+function _activityDayLabel(dateKey){
+  if(!dateKey)return 'Undated';
+  var today=_localDateKeyFromDate(new Date());
+  var y=new Date();y.setDate(y.getDate()-1);
+  var yesterday=_localDateKeyFromDate(y);
+  if(dateKey===today)return 'Today';
+  if(dateKey===yesterday)return 'Yesterday';
+  var d=parseAuditDate(dateKey);
+  return d?d.toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}):dateKey;
+}
+function _dedupeActivityRows(rows){
+  var seen={},seenAutoDelayDays={},out=[];
+  (rows||[]).forEach(function(row){
+    var l=row.log||{};
+    var dateKey=row.dateKey||_activityLogDateKey(l)||'undated';
+    if(_isAutoDelayActivity(l)){
+      if(seenAutoDelayDays[dateKey])return;
+      seenAutoDelayDays[dateKey]=true;
+    }
+    var key=[dateKey,l.user||'System',l.action||'Updated',l.ts||l.at||l.updatedAt||''].join('|');
+    if(seen[key])return;
+    seen[key]=true;
+    out.push(row);
+  });
+  return out;
+}
 function touchFinding(f){
   if(f&&typeof f==='object')f.updatedAt=new Date().toISOString();
   return f;
@@ -1902,23 +2033,27 @@ function renderCapaActivityLog(f){
   var todayKey=_localDateKeyFromDate(new Date());
   var logs=(Array.isArray(f&&f.activityLog)?f.activityLog:[]).map(function(l,idx){
     return {log:l,idx:idx,time:_activityLogTime(l),dateKey:_activityLogDateKey(l)};
-  }).filter(function(row){return row.dateKey===todayKey;})
-    .sort(function(a,b){return (b.time-a.time)||(b.idx-a.idx);});
-  if(!logs.length)return '<div class="txs td" style="padding:8px 0;">No activity today</div>';
-  var seenAutoDelayDays={};
-  var filteredLogs=[];
-  logs.forEach(function(row){
-    var l=row.log;
-    if(_isAutoDelayActivity(l)){
-      var dateKey=row.dateKey||_activityLogDateKey(l);
-      if(seenAutoDelayDays[dateKey])return;
-      seenAutoDelayDays[dateKey]=true;
-    }
-    filteredLogs.push(l);
-  });
-  return filteredLogs.map(function(l){
-    return `<div class="tli"><div class="tldot" style="background:var(--bg3);">i</div><div><div class="txs f7">${sanitize(l&&l.user||'System')}: ${sanitize(l&&l.action||'Updated')}</div><div class="txx td">${sanitize(l&&l.ts||'')}</div></div></div>`;
-  }).join('');
+  }).sort(function(a,b){return (b.time-a.time)||(b.idx-a.idx);});
+  logs=_dedupeActivityRows(logs);
+  if(!logs.length)return '<div class="txs td" style="padding:8px 0;">No activity recorded</div>';
+  function itemHtml(row){
+    var l=row.log||{};
+    var ts=l.ts||l.at||l.updatedAt||(row.time?new Date(row.time).toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'}):'');
+    return `<div class="tli"><div class="tldot" style="background:var(--bg3);">i</div><div><div class="txs f7">${sanitize(l.user||'System')}: ${sanitize(l.action||'Updated')}</div><div class="txx td">${sanitize(ts)}</div></div></div>`;
+  }
+  var todayRows=logs.filter(function(row){return row.dateKey===todayKey;});
+  var historyRows=logs.filter(function(row){return row.dateKey!==todayKey;}).slice(0,120);
+  var html='<div class="txx f7 td" style="margin:2px 0 6px;">Today</div>'+
+    (todayRows.length?todayRows.map(itemHtml).join(''):'<div class="txs td" style="padding:4px 0 8px;">No activity today</div>');
+  if(historyRows.length){
+    var groups={};
+    historyRows.forEach(function(row){var k=row.dateKey||'undated';(groups[k]=groups[k]||[]).push(row);});
+    html+='<div class="txx f7 td" style="margin:10px 0 6px;">History</div>';
+    Object.keys(groups).sort().reverse().forEach(function(k){
+      html+='<div style="border-top:1px solid var(--border);padding-top:7px;margin-top:7px;"><div class="txx f7 td" style="margin-bottom:4px;">'+sanitize(_activityDayLabel(k))+'</div>'+groups[k].map(itemHtml).join('')+'</div>';
+    });
+  }
+  return html;
 }
 function openCapa(key){
   var f=findCapa(key);
@@ -2038,22 +2173,33 @@ function completedAuditKey(audit){
 function derivedCompletedAuditsFromFindings(existing){
   if(typeof APP==='undefined'||!APP.findings)return [];
   var existingKeys=new Set((existing||[]).map(completedAuditKey).filter(Boolean));
+  // Also track existing auditRefs so we never create a derived entry for a known audit
+  var existingRefs=new Set((existing||[]).map(function(a){return String(a&&(a.ref||a.auditRef||a.id)||'').trim().toLowerCase();}).filter(Boolean));
   var groups={};
   (APP.findings||[]).forEach(function(f){
     if(!f||!f.dept)return;
+    var auditRef=String(f.auditRef||f.auditId||'').trim();
+    // Skip if the auditRef already exists as a completed audit — no need to derive
+    if(auditRef&&existingRefs.has(auditRef.toLowerCase()))return;
     var date=f.auditSubmittedAt||f.submittedAt||f.createdAt||f.date||'';
     var d=parseAuditDate(date);
     var day=d?d.toISOString().slice(0,10):String(date||'').slice(0,10);
-    var auditRef=String(f.auditRef||f.auditId||'').trim();
-    var key=f.dept+'|'+(auditRef||('findings-'+day));
+    // Use a stable fallback key (never Date.now()) to avoid generating new entries on each call
+    var stableDay=day||'nodate';
+    var key=f.dept+'|'+(auditRef||('findings-'+stableDay));
     if(!groups[key]){
       var dept=APP.depts.find(function(x){return x.code===f.dept;})||{code:f.dept,name:f.dept};
-      groups[key]={dept:f.dept,deptName:f.deptName||dept.name,ref:auditRef||('AUTO-'+f.dept+'-'+(day||Date.now())),submittedAt:date||new Date().toISOString(),date:date||new Date().toISOString(),rows:[]};
+      // Only use stable AUTO ref — never timestamp-based to avoid duplicates
+      var autoRef=auditRef||('AUTO-'+f.dept+'-'+stableDay);
+      groups[key]={dept:f.dept,deptName:f.deptName||dept.name,ref:autoRef,submittedAt:date||'',date:date||'',rows:[]};
     }
     groups[key].rows.push(f);
   });
   return Object.keys(groups).map(function(key){
-    var g=groups[key],counts=auditFindingCounts(g.rows);
+    var g=groups[key];
+    // Skip groups with no valid date — they shouldn't be shown as completed audits
+    if(!g.submittedAt)return null;
+    var counts=auditFindingCounts(g.rows);
     var audit={id:'derived_'+key.replace(/[^a-z0-9]+/gi,'_').toLowerCase(),ref:g.ref,dept:g.dept,deptName:g.deptName,status:'submitted',submittedAt:g.submittedAt,date:g.date,findingRefs:g.rows.map(function(f){return f.ref;}).filter(Boolean),auditScoreFrozen:scoreFromFindingCounts(counts),auditFindingCountsFrozen:counts,derivedFromFindings:true};
     return existingKeys.has(completedAuditKey(audit))?null:audit;
   }).filter(Boolean);
@@ -2065,21 +2211,20 @@ function normalizeCompletedAuditsData(data){
     var audit=(raw&&typeof raw==='object')?raw:{};
     if(audit!==raw)changed=true;
     var updates={};
-    var frozen=Number(audit.auditScoreFrozen);
-    if(Number.isFinite(frozen)){
-      frozen=Math.min(100,Math.max(0,Math.round(frozen)));
-      if(audit.auditScoreFrozen!==frozen){updates.auditScoreFrozen=frozen;changed=true;}
-    }else if(audit.session&&audit.session.findings){
-      updates.auditScoreFrozen=auditScoreFromSessionFindings(audit.session);changed=true;
-    }else if(typeof auditFindingRows==='function'){
-      var rows=auditFindingRows(audit);
-      if(rows.length){updates.auditScoreFrozen=auditScore(rows);changed=true;}
-    }
-    if(!audit.auditFindingCountsFrozen&&audit.session&&audit.session.findings){
-      updates.auditFindingCountsFrozen=auditFindingCounts(Object.values(audit.session.findings));changed=true;
-    }else if(!audit.auditFindingCountsFrozen&&typeof auditFindingRows==='function'){
-      var countRows=auditFindingRows(audit);
-      if(countRows.length){updates.auditFindingCountsFrozen=auditFindingCounts(countRows);changed=true;}
+    var rows=typeof auditFindingRows==='function'?auditFindingRows(audit):[];
+    var sessionRows=audit.session&&audit.session.findings?Object.values(audit.session.findings):[];
+    var scoreRows=rows.length?rows:sessionRows;
+    if(scoreRows.length){
+      var fixedScore=auditScore(scoreRows);
+      var fixedCounts=auditFindingCounts(scoreRows);
+      if(audit.auditScoreFrozen!==fixedScore){updates.auditScoreFrozen=fixedScore;changed=true;}
+      if(JSON.stringify(audit.auditFindingCountsFrozen||{})!==JSON.stringify(fixedCounts)){updates.auditFindingCountsFrozen=fixedCounts;changed=true;}
+    }else{
+      var frozen=Number(audit.auditScoreFrozen);
+      if(Number.isFinite(frozen)){
+        frozen=Math.min(100,Math.max(0,Math.round(frozen)));
+        if(audit.auditScoreFrozen!==frozen){updates.auditScoreFrozen=frozen;changed=true;}
+      }
     }
     if(!String(audit.status||'').trim()){updates.status='submitted';changed=true;}
     return Object.keys(updates).length?Object.assign({},audit,updates):audit;
@@ -3052,7 +3197,7 @@ function createAudit(){
 // DASHBOARD
 // ═══════════════════════════════════════════════════
 function renderDashboard(){
-  var _allF=filterByDateRange(APP.findings,'due');var _isSpoc=APP.currentUser?.role==='spoc';var _spocDept=APP.currentUser?.dept||'';
+  var _allF=filteredFindings();var _isSpoc=APP.currentUser?.role==='spoc';var _spocDept=APP.currentUser?.dept||'';
   const F=_isSpoc?_allF.filter(f=>f.dept===_spocDept):_allF;const open=F.filter(f=>f.status!=='closed').length;
   const visibleDepts=_isSpoc?APP.depts.filter(d=>d.code===_spocDept):APP.depts;
   const overallAuditScore=orgLatestAuditScore(visibleDepts);
@@ -4442,7 +4587,7 @@ function exportFindingsExcel(){
 // CAPA
 // ═══════════════════════════════════════════════════
 function renderCapa(){
-  const F=filterByDateRange(APP.findings,'due');const uRole=APP.currentUser?.role;const uDept=APP.currentUser?.dept||'';const scoped=sortCapaRows((uRole==='spoc')?F.filter(f=>f.dept===uDept):(uRole==='manager'?F.filter(f=>managerDeptCodes().includes(f.dept)):F));const open=scoped.filter(f=>f.status!=='closed');
+  const F=filteredFindings();const uRole=APP.currentUser?.role;const uDept=APP.currentUser?.dept||'';const scoped=sortCapaRows((uRole==='spoc')?F.filter(f=>f.dept===uDept):(uRole==='manager'?F.filter(f=>managerDeptCodes().includes(f.dept)):F));const open=scoped.filter(f=>f.status!=='closed');
   const deptOptions=(uRole==='spoc'?APP.depts.filter(d=>d.code===uDept):(uRole==='manager'?APP.depts.filter(d=>managerDeptCodes().includes(d.code)):APP.depts));
   const active=findCapa(APP.activeCapaId,scoped)||open[0]||scoped[0]||null;if(active)APP.activeCapaId=capaKey(active);
   return`

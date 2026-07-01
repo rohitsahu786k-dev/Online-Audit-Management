@@ -331,8 +331,17 @@ function findingDeletedTime(finding) {
   return Number.isFinite(time) ? time : 0;
 }
 
+function isDraftFindingLeak(finding) {
+  return Boolean(
+    finding
+    && String(finding.status || '').toLowerCase() === 'draft'
+    && finding.audit
+    && finding.session
+  );
+}
+
 function isDeletedFinding(finding) {
-  return Boolean(finding && finding.deletedAt);
+  return Boolean(finding && finding.deletedAt) || isDraftFindingLeak(finding);
 }
 
 function hasReviewDecision(finding) {
@@ -471,6 +480,7 @@ function statusChangeNewerThanReview(changed, reviewed) {
 
 function normalizeFindingSyncState(finding) {
   if (!finding || typeof finding !== 'object') return finding;
+  if (isDraftFindingLeak(finding)) return null;
   const item = { ...finding };
   let status = String(item.status || '').toLowerCase();
   let capaStatus = String(item.capaStatus || '').toLowerCase();
@@ -619,9 +629,9 @@ function chooseFindingForSync(current, incoming) {
 
 function mergeFindingsForSync(currentValue, incomingValue) {
   if (!Array.isArray(incomingValue)) return incomingValue;
-  incomingValue = incomingValue.map(normalizeFindingSyncState);
+  incomingValue = incomingValue.map(normalizeFindingSyncState).filter(Boolean);
   if (!Array.isArray(currentValue) || !currentValue.length) return incomingValue;
-  currentValue = currentValue.map(normalizeFindingSyncState);
+  currentValue = currentValue.map(normalizeFindingSyncState).filter(Boolean);
 
   const currentByKey = new Map();
   currentValue.forEach(finding => {
@@ -643,6 +653,148 @@ function mergeFindingsForSync(currentValue, incomingValue) {
   });
 
   return merged;
+}
+
+function normalizeAuditSeverity(severity) {
+  const text = String(severity || 'obs').toLowerCase().trim();
+  if (text.includes('critical')) return 'critical';
+  if (text.includes('major')) return 'major';
+  if (text.includes('minor')) return 'minor';
+  return 'obs';
+}
+
+function auditFindingCounts(findings) {
+  const counts = { critical: 0, major: 0, minor: 0, obs: 0, total: 0 };
+  (Array.isArray(findings) ? findings : []).forEach(finding => {
+    const key = normalizeAuditSeverity(finding && (finding.sev ?? finding.severity));
+    counts[key] += 1;
+    counts.total += 1;
+  });
+  return counts;
+}
+
+function auditScoreFromCounts(counts) {
+  const score = 100
+    - (Number(counts.critical || 0) * 15)
+    - (Number(counts.major || 0) * 10)
+    - (Number(counts.minor || 0) * 5)
+    - (Number(counts.obs || 0) * 2);
+  return Math.min(100, Math.max(0, Math.round(score)));
+}
+
+function completedAuditKey(audit) {
+  if (!audit || typeof audit !== 'object') return '';
+  return String(audit.ref || audit.auditRef || audit.id || '').trim().toLowerCase();
+}
+
+function completedAuditTime(audit) {
+  if (!audit || typeof audit !== 'object') return 0;
+  const time = Date.parse(audit.updatedAt || audit.submittedAt || audit.date || '');
+  return Number.isFinite(time) ? time : 0;
+}
+
+function completedAuditCompleteness(audit) {
+  if (!audit || typeof audit !== 'object') return 0;
+  let score = audit.auditScoreFrozen !== undefined ? 1 : 0;
+  score += Array.isArray(audit.findingRefs) ? audit.findingRefs.length : 0;
+  if (audit.auditFindingCountsFrozen && typeof audit.auditFindingCountsFrozen === 'object') {
+    score += Number(audit.auditFindingCountsFrozen.total || 0);
+  }
+  if (audit.session && audit.session.findings) score += Object.keys(audit.session.findings).length;
+  return score;
+}
+
+function isBadDerivedCompletedAudit(audit) {
+  if (!audit || typeof audit !== 'object' || !audit.derivedFromFindings) return false;
+  const ref = String(audit.ref || audit.auditRef || audit.id || '').trim();
+  const id = String(audit.id || '');
+  return /^AUTO-[A-Z0-9]+-\d{10,}$/.test(ref) || /^derived_[a-z0-9]+_findings_?$/i.test(id);
+}
+
+function chooseCompletedAudit(current, incoming) {
+  if (!current) return incoming;
+  if (!incoming) return current;
+  const currentTime = completedAuditTime(current);
+  const incomingTime = completedAuditTime(incoming);
+  if (incomingTime > currentTime) return incoming;
+  if (incomingTime < currentTime) return current;
+  return completedAuditCompleteness(incoming) > completedAuditCompleteness(current) ? incoming : current;
+}
+
+function repairCompletedAuditScores(audits, findings) {
+  const activeFindings = (Array.isArray(findings) ? findings : [])
+    .map(normalizeFindingSyncState)
+    .filter(finding => finding && !finding.deletedAt && !isDraftFindingLeak(finding));
+  return audits.map(audit => {
+    const ref = String(audit.ref || audit.auditRef || audit.id || '').trim();
+    const explicitRefs = new Set((audit.findingRefs || []).map(String));
+    const rows = activeFindings.filter(finding => (
+      finding.dept === audit.dept
+      && (
+        String(finding.auditRef || finding.auditId || '') === ref
+        || explicitRefs.has(String(finding.ref || ''))
+      )
+    ));
+    if (!rows.length) return audit;
+    const counts = auditFindingCounts(rows);
+    return {
+      ...audit,
+      findingRefs: rows.map(finding => finding.ref).filter(Boolean),
+      auditScoreFrozen: auditScoreFromCounts(counts),
+      auditFindingCountsFrozen: counts,
+      status: audit.status || 'submitted'
+    };
+  });
+}
+
+function mergeCompletedAuditsForSync(currentValue, incomingValue, findingsValue) {
+  if (!Array.isArray(incomingValue)) return Array.isArray(currentValue) ? currentValue : [];
+  const current = (Array.isArray(currentValue) ? currentValue : []).filter(audit => !isBadDerivedCompletedAudit(audit));
+  const incoming = incomingValue.filter(audit => !isBadDerivedCompletedAudit(audit));
+  if (!incoming.length && current.length) return repairCompletedAuditScores(current, findingsValue);
+  const byKey = new Map();
+  current.concat(incoming).forEach(audit => {
+    const key = completedAuditKey(audit);
+    if (!key) return;
+    byKey.set(key, chooseCompletedAudit(byKey.get(key), audit));
+  });
+  return repairCompletedAuditScores(Array.from(byKey.values()), findingsValue)
+    .sort((a, b) => completedAuditTime(a) - completedAuditTime(b));
+}
+
+function notificationKey(row) {
+  if (!row || typeof row !== 'object') return '';
+  return String(row.id || [row.type, row.title, row.body, row.ts].join('|')).trim();
+}
+
+function notificationTime(row) {
+  if (!row || typeof row !== 'object') return 0;
+  const raw = String(row.ts || row.at || row.updatedAt || '').trim();
+  const direct = Date.parse(raw);
+  if (Number.isFinite(direct)) return direct;
+  const match = raw.match(/^(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4}),\s+(\d{1,2}):(\d{2})\s*(am|pm)$/i);
+  if (!match) return 0;
+  const months = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+  let hour = Number(match[4]);
+  const meridiem = match[6].toLowerCase();
+  if (meridiem === 'pm' && hour < 12) hour += 12;
+  if (meridiem === 'am' && hour === 12) hour = 0;
+  const time = new Date(Number(match[3]), months[match[2].toLowerCase()], Number(match[1]), hour, Number(match[5])).getTime();
+  return Number.isFinite(time) ? time : 0;
+}
+
+function mergeNotificationsForSync(currentValue, incomingValue) {
+  if (!Array.isArray(incomingValue)) return Array.isArray(currentValue) ? currentValue : [];
+  const byKey = new Map();
+  []
+    .concat(Array.isArray(currentValue) ? currentValue : [], incomingValue)
+    .forEach(row => {
+      const key = notificationKey(row);
+      if (key) byKey.set(key, Object.assign({}, byKey.get(key) || {}, row));
+    });
+  return Array.from(byKey.values())
+    .sort((a, b) => notificationTime(b) - notificationTime(a))
+    .slice(0, 600);
 }
 
 function auditDraftKey(row) {
@@ -857,6 +1009,19 @@ app.put('/api/sync/:key', wrapAsync(async (req, res) => {
     incomingValue = mergeAuditDraftsForSync(current && current.value, incomingValue);
   }
 
+  if (key === 'ap_completed_audits') {
+    const [current, findingsRow] = await Promise.all([
+      collection.findOne({ key }),
+      collection.findOne({ key: 'ap_finds' })
+    ]);
+    incomingValue = mergeCompletedAuditsForSync(current && current.value, incomingValue, findingsRow && findingsRow.value);
+  }
+
+  if (key === 'ap_notifs') {
+    const current = await collection.findOne({ key });
+    incomingValue = mergeNotificationsForSync(current && current.value, incomingValue);
+  }
+
   await collection.updateOne(
     { key },
     {
@@ -881,7 +1046,7 @@ app.post('/api/sync/bulk', wrapAsync(async (req, res) => {
   const collection = await getCollection();
   const now = new Date();
   for (const key of keys) {
-    const current = key === 'ap_finds' || key === 'ap_audit_drafts' || key === 'ap_email_logs' || key === 'ap_users'
+    const current = key === 'ap_finds' || key === 'ap_audit_drafts' || key === 'ap_email_logs' || key === 'ap_users' || key === 'ap_completed_audits' || key === 'ap_notifs'
       ? await collection.findOne({ key })
       : null;
     if (key === 'ap_finds') {
@@ -895,6 +1060,19 @@ app.post('/api/sync/bulk', wrapAsync(async (req, res) => {
     }
     if (key === 'ap_users') {
       items[key] = mergeUsersForSync(current && current.value, items[key]);
+    }
+    if (key === 'ap_completed_audits') {
+      const findingsRow = keys.includes('ap_finds')
+        ? null
+        : await collection.findOne({ key: 'ap_finds' });
+      items[key] = mergeCompletedAuditsForSync(
+        current && current.value,
+        items[key],
+        Array.isArray(items.ap_finds) ? items.ap_finds : (findingsRow && findingsRow.value)
+      );
+    }
+    if (key === 'ap_notifs') {
+      items[key] = mergeNotificationsForSync(current && current.value, items[key]);
     }
   }
   await collection.bulkWrite(keys.map(key => ({
