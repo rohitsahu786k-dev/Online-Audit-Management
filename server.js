@@ -18,6 +18,11 @@ const SMTP_SECURE = String(process.env.SMTP_SECURE || 'true').toLowerCase() === 
 const SMTP_USER = process.env.SMTP_USER;
 const SMTP_PASS = process.env.SMTP_PASS;
 const SMTP_FROM = process.env.SMTP_FROM || (SMTP_USER ? `OnePWS AuditPro <${SMTP_USER}>` : undefined);
+const AUTH_TOKEN_TTL_MS = Number(process.env.AUTH_TOKEN_TTL_MS || 12 * 60 * 60 * 1000);
+const AUTH_SECRET = process.env.AUTH_SECRET || crypto.createHash('sha256')
+  .update([MONGODB_URI || '', SMTP_PASS || '', MONGODB_DB, 'onepws-auditpro-auth'].join('|'))
+  .digest('hex');
+const PASSWORD_HASH_ITERATIONS = Number(process.env.PASSWORD_HASH_ITERATIONS || 120000);
 
 const SYNC_KEYS = [
   'ap_users',
@@ -52,6 +57,18 @@ let mongoClient;
 let appData;
 let mongoConnectPromise;
 let mailer;
+
+app.disable('x-powered-by');
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  if (req.path.startsWith('/api/')) {
+    res.setHeader('Cache-Control', 'no-store');
+  }
+  next();
+});
 
 app.use(express.json({ limit: '50mb' }));
 
@@ -297,19 +314,29 @@ function userMergeKey(user) {
 function mergeUsersForSync(existing, incoming) {
   if (!Array.isArray(incoming)) return incoming;
   if (!Array.isArray(existing) || !existing.length) return incoming;
-  if (incoming.length === 1 && existing.length > 1) {
-    const byKey = new Map();
-    existing.forEach(user => {
-      const key = userMergeKey(user);
-      if (key) byKey.set(key, user);
-    });
-    incoming.forEach(user => {
-      const key = userMergeKey(user);
-      if (key) byKey.set(key, Object.assign({}, byKey.get(key) || {}, user));
-    });
-    return Array.from(byKey.values());
-  }
-  return incoming;
+
+  const byKey = new Map();
+  const existingKeys = new Set();
+  existing.forEach(user => {
+    const key = userMergeKey(user);
+    if (key) {
+      existingKeys.add(key);
+      byKey.set(key, user);
+    }
+  });
+
+  const incomingKeys = new Set(incoming.map(userMergeKey).filter(Boolean));
+  const isShrinkingPayload = incomingKeys.size < existingKeys.size
+    && Array.from(existingKeys).some(key => !incomingKeys.has(key));
+
+  incoming.forEach(user => {
+    const key = userMergeKey(user);
+    if (!key) return;
+    if (isShrinkingPayload && byKey.has(key)) return;
+    byKey.set(key, normalizeUserForStorage(user, byKey.get(key)));
+  });
+
+  return Array.from(byKey.values());
 }
 
 function findingKey(finding) {
@@ -851,6 +878,122 @@ function cleanIdentity(input) {
   return String(input || '').trim().toLowerCase();
 }
 
+function base64Url(input) {
+  return Buffer.from(input).toString('base64url');
+}
+
+function signText(input) {
+  return crypto.createHmac('sha256', AUTH_SECRET).update(input).digest('base64url');
+}
+
+function createAuthToken(user) {
+  const payload = {
+    sub: String(user.id || ''),
+    loginId: String(user.loginId || ''),
+    role: String(user.role || ''),
+    exp: Date.now() + AUTH_TOKEN_TTL_MS
+  };
+  const body = base64Url(JSON.stringify(payload));
+  return `${body}.${signText(body)}`;
+}
+
+function parseAuthToken(token) {
+  const raw = String(token || '').trim();
+  const parts = raw.split('.');
+  if (parts.length !== 2) return null;
+  const expected = signText(parts[0]);
+  const actual = parts[1];
+  if (expected.length !== actual.length) return null;
+  if (!crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(actual))) return null;
+  let payload;
+  try {
+    payload = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
+  } catch (_err) {
+    return null;
+  }
+  if (!payload || Number(payload.exp || 0) < Date.now()) return null;
+  return payload;
+}
+
+function publicUser(user) {
+  if (!user || typeof user !== 'object') return user;
+  const copy = { ...user };
+  delete copy.password;
+  delete copy.passwordHash;
+  delete copy.legacyPasswords;
+  delete copy.legacyPasswordHashes;
+  return copy;
+}
+
+function sanitizeUsersForClient(users) {
+  return Array.isArray(users) ? users.map(publicUser) : users;
+}
+
+function sanitizeSyncValueForClient(key, value) {
+  if (key === 'ap_users') return sanitizeUsersForClient(value);
+  if (key === 'ap_local_storage_backup' && value && typeof value === 'object') {
+    const copy = { ...value };
+    if (copy.data && typeof copy.data === 'object') {
+      copy.data = { ...copy.data };
+      if (copy.data.ap_users) copy.data.ap_users = sanitizeUsersForClient(copy.data.ap_users);
+      delete copy.data.ap_rem_p;
+    }
+    return copy;
+  }
+  return value;
+}
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('base64url');
+  const hash = crypto.pbkdf2Sync(String(password), salt, PASSWORD_HASH_ITERATIONS, 32, 'sha256').toString('base64url');
+  return `pbkdf2$${PASSWORD_HASH_ITERATIONS}$${salt}$${hash}`;
+}
+
+function verifyPassword(user, password) {
+  if (!user) return false;
+  const plain = String(password || '');
+  const hashes = [user.passwordHash].concat(Array.isArray(user.legacyPasswordHashes) ? user.legacyPasswordHashes : []);
+  for (const hashValue of hashes) {
+    const storedHash = String(hashValue || '');
+    if (storedHash.startsWith('pbkdf2$')) {
+      const parts = storedHash.split('$');
+      if (parts.length !== 4) continue;
+      const iterations = Number(parts[1]);
+      const actual = crypto.pbkdf2Sync(plain, parts[2], iterations, 32, 'sha256').toString('base64url');
+      if (actual.length === parts[3].length && crypto.timingSafeEqual(Buffer.from(actual), Buffer.from(parts[3]))) return true;
+    }
+  }
+  const legacyPlain = Array.isArray(user.legacyPasswords) ? user.legacyPasswords : [];
+  if (legacyPlain.some(value => String(value || '') === plain)) return true;
+  const storedHash = String(user.passwordHash || '');
+  if (storedHash.startsWith('pbkdf2$')) {
+    const parts = storedHash.split('$');
+    if (parts.length !== 4) return false;
+    const iterations = Number(parts[1]);
+    const actual = crypto.pbkdf2Sync(plain, parts[2], iterations, 32, 'sha256').toString('base64url');
+    return actual.length === parts[3].length && crypto.timingSafeEqual(Buffer.from(actual), Buffer.from(parts[3]));
+  }
+  const storedPlain = String(user.password || '');
+  return storedPlain.length === plain.length && crypto.timingSafeEqual(Buffer.from(storedPlain), Buffer.from(plain));
+}
+
+function normalizeUserForStorage(user, existing) {
+  if (!user || typeof user !== 'object') return user;
+  const next = { ...(existing || {}), ...user };
+  const password = Object.prototype.hasOwnProperty.call(user, 'password') ? String(user.password || '') : '';
+  if (password) {
+    next.passwordHash = hashPassword(password);
+    delete next.legacyPasswordHashes;
+    delete next.legacyPasswords;
+  } else if (existing && existing.passwordHash) {
+    next.passwordHash = existing.passwordHash;
+  } else if (existing && existing.password) {
+    next.passwordHash = hashPassword(existing.password);
+  }
+  delete next.password;
+  return next;
+}
+
 function hashOtp(userId, otp) {
   return crypto.createHash('sha256').update(`${userId}:${otp}:${SMTP_PASS || 'auditpro'}`).digest('hex');
 }
@@ -906,8 +1049,41 @@ function findUserByIdentity(users, identity) {
   if (!needle) return null;
   return users.find(user => {
     if (!user || user.active === false) return false;
-    return cleanIdentity(user.loginId) === needle || cleanIdentity(user.email) === needle;
+    const aliases = Array.isArray(user.legacyLoginIds) ? user.legacyLoginIds : [];
+    return cleanIdentity(user.loginId) === needle
+      || cleanIdentity(user.email) === needle
+      || aliases.some(alias => cleanIdentity(alias) === needle);
   }) || null;
+}
+
+async function findActiveUserFromToken(req) {
+  const auth = String(req.headers.authorization || '');
+  const token = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7) : String(req.headers['x-auth-token'] || '');
+  const payload = parseAuthToken(token);
+  if (!payload) return null;
+  const { users } = await getUsersRecord();
+  return users.find(user => user && user.active !== false && String(user.id || '') === String(payload.sub || '')) || null;
+}
+
+async function requireApiAuth(req, res, next) {
+  if (!req.path.startsWith('/api/')) return next();
+  const publicRoute = req.path === '/api/health'
+    || req.path === '/api/auth/login'
+    || req.path === '/api/auth/forgot-password'
+    || req.path === '/api/auth/reset-password';
+  if (publicRoute) return next();
+  const user = await findActiveUserFromToken(req);
+  if (!user) return res.status(401).json({ ok: false, error: 'Authentication required' });
+  req.authUser = user;
+  return next();
+}
+
+function requireAdmin(req) {
+  if (!req.authUser || req.authUser.role !== 'admin') {
+    const err = new Error('Master Admin access required');
+    err.statusCode = 403;
+    throw err;
+  }
 }
 
 function wrapAsync(fn) {
@@ -933,6 +1109,83 @@ app.get('/api/health', wrapAsync(async (_req, res) => {
   });
 }));
 
+app.post('/api/auth/login', wrapAsync(async (req, res) => {
+  const identity = cleanIdentity(req.body && req.body.identity);
+  const password = String((req.body && req.body.password) || '');
+  if (!identity || !password) return res.status(400).json({ ok: false, error: 'Login ID and password are required' });
+
+  const { collection, users } = await getUsersRecord();
+  const user = findUserByIdentity(users, identity);
+  if (!user || !verifyPassword(user, password)) {
+    return res.status(401).json({ ok: false, error: 'Invalid credentials' });
+  }
+
+  if (!user.passwordHash && user.password) {
+    const nextUsers = users.map(row => row && row.id === user.id ? normalizeUserForStorage(row, row) : row);
+    await collection.updateOne(
+      { key: 'ap_users' },
+      { $set: { key: 'ap_users', value: nextUsers, updatedAt: new Date(), updatedBy: 'password-hash-migration' } },
+      { upsert: true }
+    );
+  }
+
+  res.json({
+    ok: true,
+    token: createAuthToken(user),
+    user: publicUser(user),
+    expiresInMs: AUTH_TOKEN_TTL_MS
+  });
+}));
+
+app.get('/api/auth/me', wrapAsync(async (req, res) => {
+  const user = await findActiveUserFromToken(req);
+  if (!user) return res.status(401).json({ ok: false, error: 'Authentication required' });
+  res.json({ ok: true, user: publicUser(user) });
+}));
+
+app.use(wrapAsync(requireApiAuth));
+
+app.put('/api/auth/profile', wrapAsync(async (req, res) => {
+  const patch = req.body || {};
+  const name = String(patch.name || '').trim();
+  const email = String(patch.email || '').trim();
+  const dept = String(patch.dept || '').trim();
+  const password = Object.prototype.hasOwnProperty.call(patch, 'password') ? String(patch.password || '') : '';
+
+  if (!name) return res.status(400).json({ ok: false, error: 'Name is required' });
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ ok: false, error: 'Valid email is required' });
+  }
+  if (password && password.length < 6) {
+    return res.status(400).json({ ok: false, error: 'Password must be at least 6 characters' });
+  }
+
+  const { collection, users } = await getUsersRecord();
+  const index = users.findIndex(user => user && String(user.id || '') === String(req.authUser.id || ''));
+  if (index < 0) return res.status(404).json({ ok: false, error: 'Account not found' });
+
+  const current = users[index];
+  const nextUser = normalizeUserForStorage({
+    ...current,
+    name,
+    email,
+    dept,
+    avatar: name.substring(0, 2).toUpperCase(),
+    ...(password ? { password } : {})
+  }, current);
+  const nextUsers = users.slice();
+  nextUsers[index] = nextUser;
+  const now = new Date();
+
+  await collection.updateOne(
+    { key: 'ap_users' },
+    { $set: { key: 'ap_users', value: nextUsers, updatedAt: now, updatedBy: current.loginId || 'profile-update' } },
+    { upsert: true }
+  );
+
+  res.json({ ok: true, user: publicUser(nextUser), updatedAt: now });
+}));
+
 app.get('/api/sync/keys', (_req, res) => {
   res.json({ ok: true, keys: SYNC_KEYS });
 });
@@ -943,7 +1196,7 @@ app.get('/api/sync', wrapAsync(async (_req, res) => {
   const data = {};
   rows.forEach(row => {
     data[row.key] = {
-      value: row.value,
+      value: sanitizeSyncValueForClient(row.key, row.value),
       updatedAt: row.updatedAt,
       updatedBy: row.updatedBy || 'system'
     };
@@ -956,7 +1209,7 @@ app.get('/api/sync/:key', wrapAsync(async (req, res) => {
   assertSyncKey(key);
   const collection = await getCollection();
   const row = await collection.findOne({ key });
-  res.json({ ok: true, key, value: row ? row.value : null, updatedAt: row ? row.updatedAt : null });
+  res.json({ ok: true, key, value: row ? sanitizeSyncValueForClient(key, row.value) : null, updatedAt: row ? row.updatedAt : null });
 }));
 
 app.put('/api/sync/:key', wrapAsync(async (req, res) => {
@@ -966,6 +1219,7 @@ app.put('/api/sync/:key', wrapAsync(async (req, res) => {
   const collection = await getCollection();
   const now = new Date();
   let incomingValue = req.body && Object.prototype.hasOwnProperty.call(req.body, 'value') ? req.body.value : null;
+  if (key === 'ap_users' || key === 'ap_permissions') requireAdmin(req);
 
   if (key === 'ap_email_logs') {
     const current = await collection.findOne({ key });
@@ -1042,6 +1296,7 @@ app.post('/api/sync/bulk', wrapAsync(async (req, res) => {
   const items = (req.body && req.body.items) || {};
   const keys = Object.keys(items).filter(key => SYNC_KEYS.includes(key));
   if (!keys.length) return res.json({ ok: true, count: 0 });
+  if (keys.includes('ap_users') || keys.includes('ap_permissions')) requireAdmin(req);
 
   const collection = await getCollection();
   const now = new Date();
@@ -1094,6 +1349,7 @@ app.post('/api/sync/bulk', wrapAsync(async (req, res) => {
 }));
 
 app.delete('/api/sync/:key', wrapAsync(async (req, res) => {
+  requireAdmin(req);
   const { key } = req.params;
   assertSyncKey(key);
   const collection = await getCollection();
@@ -1101,7 +1357,8 @@ app.delete('/api/sync/:key', wrapAsync(async (req, res) => {
   res.json({ ok: true, key });
 }));
 
-app.delete('/api/sync', wrapAsync(async (_req, res) => {
+app.delete('/api/sync', wrapAsync(async (req, res) => {
+  requireAdmin(req);
   const collection = await getCollection();
   const result = await collection.deleteMany({ key: { $in: SYNC_KEYS } });
   res.json({ ok: true, deletedCount: result.deletedCount });
@@ -1495,7 +1752,7 @@ app.post('/api/auth/reset-password', wrapAsync(async (req, res) => {
     return res.status(400).json({ ok: false, error: 'Invalid OTP' });
   }
 
-  const nextUsers = users.map(row => row && row.id === user.id ? Object.assign({}, row, { password }) : row);
+  const nextUsers = users.map(row => row && row.id === user.id ? normalizeUserForStorage({ ...row, password }, row) : row);
   const now = new Date();
   await collection.updateOne(
     { key: 'ap_users' },

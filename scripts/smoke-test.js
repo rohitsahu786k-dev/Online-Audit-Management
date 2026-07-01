@@ -6,6 +6,7 @@ const fs = require('fs');
 const APP_URL = process.env.APP_URL;
 const SMOKE_LOGIN_ID = process.env.SMOKE_LOGIN_ID || 'admin';
 const SMOKE_PASSWORD = process.env.SMOKE_PASSWORD || 'Admin123!';
+let authToken = '';
 const BROWSER_CANDIDATES = [
   process.env.PLAYWRIGHT_CHROME,
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
@@ -19,10 +20,23 @@ if (!APP_URL) {
 }
 
 async function api(path, opts) {
+  opts = opts || {};
+  opts.headers = Object.assign({}, opts.headers || {});
+  if (authToken) opts.headers.Authorization = `Bearer ${authToken}`;
   const res = await fetch(`${APP_URL}${path}`, opts);
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
+}
+
+async function loginApi() {
+  const data = await api('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ identity: SMOKE_LOGIN_ID, password: SMOKE_PASSWORD })
+  });
+  authToken = data.token || '';
+  if (!authToken) throw new Error('Smoke login did not return an auth token');
 }
 
 async function getSyncValue(key) {
@@ -50,6 +64,7 @@ async function clickNav(page, navId) {
 async function main() {
   const health = await api('/api/health');
   if (!health.mongo) throw new Error('MongoDB health check is offline');
+  await loginApi();
 
   const favicon = await fetch(`${APP_URL}/favicon.ico`);
   if (!favicon.ok || !String(favicon.headers.get('content-type') || '').includes('image/png')) {

@@ -646,7 +646,8 @@ var _apiReady=false;
 var SYNC_KEYS=['ap_users','ap_depts','ap_auds','ap_cps','ap_finds','ap_learns','ap_completed_audits','ap_planned_audits','ap_import_logs','ap_capa_due','ap_secs','ap_notifs','ap_stds','ap_permissions','ap_email_master','ap_email_templates','ap_email_logs','ap_required_cc_emails','ap_root_causes','ap_media_library','ap_escalation_matrix','ap_audit_drafts','ap_local_storage_backup'];
 var LOCAL_STORAGE_BACKUP_KEY='ap_local_storage_backup';
 var PENDING_SYNC_KEY='ap_pending_sync_queue';
-var LOCAL_SYNC_EXCLUDE_KEYS={ap_rem_p:1,ap_local_storage_backup:1,ap_pending_sync_queue:1};
+var AUTH_TOKEN_KEY='ap_auth_token';
+var LOCAL_SYNC_EXCLUDE_KEYS={ap_rem_p:1,ap_auth_token:1,ap_local_storage_backup:1,ap_pending_sync_queue:1};
 var _myWrites={};
 var _syncStatus='connecting';
 
@@ -662,9 +663,22 @@ function _stripPhotos(k,v){
   }catch(e){return v;}
 }
 
+function _redactUsersForLocal(v){
+  if(!Array.isArray(v))return v;
+  return v.map(function(user){
+    if(!user||typeof user!=='object')return user;
+    var copy=Object.assign({},user);
+    delete copy.password;
+    delete copy.passwordHash;
+    return copy;
+  });
+}
+
 function _apiFetch(path,opts){
   opts=opts||{};
   opts.headers=Object.assign({'Content-Type':'application/json'},opts.headers||{});
+  var token=LS.get(AUTH_TOKEN_KEY,'');
+  if(token&&!opts.headers.Authorization)opts.headers.Authorization='Bearer '+token;
   return fetch(API_BASE+path,opts).then(function(res){
     return res.json().catch(function(){return {};}).then(function(data){
       if(!res.ok||data.ok===false)throw new Error(data.error||('HTTP '+res.status));
@@ -724,6 +738,7 @@ function _savePendingSyncItems(items){
 }
 function _queueSyncItem(k,v){
   if(SYNC_KEYS.indexOf(k)<0||k===LOCAL_STORAGE_BACKUP_KEY)return;
+  if(k==='ap_users'&&JSON.stringify(v||{}).indexOf('"password"')>-1)return;
   var items=_pendingSyncItems();
   items[k]=_stripPhotos(k,_sanitizeSyncData(k,v));
   _savePendingSyncItems(items);
@@ -1191,7 +1206,8 @@ function _refreshAfterSync(k){
 const LS={
   get(k,d=null){try{var v=localStorage.getItem(k);return v!==null?JSON.parse(v):d;}catch(e){return d;}},
   set(k,v){
-    try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}
+    var localValue=k==='ap_users'?_redactUsersForLocal(v):v;
+    try{localStorage.setItem(k,JSON.stringify(localValue));}catch(e){}
     // Sync to MongoDB backend
     if(SYNC_KEYS.indexOf(k)>-1){
       if(_apiReady){
@@ -1420,6 +1436,7 @@ function loadAS(){if(!APP.session)restoreCurrentAuditDraft();const s=APP.session
 // ── MONGODB API SYNC ──
 var _syncInitDone=false;
 function initApiSync(){
+  if(!APP.currentUser||!LS.get(AUTH_TOKEN_KEY,''))return;
   if(_syncInitDone)return;
   _syncInitDone=true;
 
@@ -1650,7 +1667,9 @@ function permissionsPayload(){return{version:PERMISSIONS_VERSION,roles:PERMS};}
 function loadPermissions(){
   var saved=LS.get('ap_permissions',null);
   var perms=normalizePermissions(saved);
-  if(!saved||!saved.version||saved.version<PERMISSIONS_VERSION)LS.set('ap_permissions',{version:PERMISSIONS_VERSION,roles:perms});
+  if(!saved||!saved.version||saved.version<PERMISSIONS_VERSION){
+    try{localStorage.setItem('ap_permissions',JSON.stringify({version:PERMISSIONS_VERSION,roles:perms}));}catch(e){}
+  }
   return perms;
 }
 let PERMS=loadPermissions();
@@ -2487,16 +2506,10 @@ function resetForgotPassword(){
   if(pw.length<6){showToast('Password must be at least 6 characters');return;}
   const btn=el('fp-reset');if(btn)btn.disabled=true;
   _apiFetch('/api/auth/reset-password',{method:'POST',body:JSON.stringify({identity,otp,password:pw})}).then(function(data){
-    return syncUsersFromApi().catch(function(){
-      const users=APP.users;const i=users.findIndex(u=>u.id===data.userId||u.loginId===data.loginId);
-      if(i>=0){users[i].password=pw;APP.users=users;}
-      return users;
-    }).then(function(){
-      closeM('m-forgot');
-      el('li-u').value=data.loginId||identity;
-      el('li-p').value='';
-      showToast('Password reset complete. Please sign in.');
-    });
+    closeM('m-forgot');
+    el('li-u').value=data.loginId||identity;
+    el('li-p').value='';
+    showToast('Password reset complete. Please sign in.');
   }).catch(function(e){
     showToast('Password reset failed: '+e.message,5000);
   }).finally(function(){if(btn)btn.disabled=false;});
@@ -2522,13 +2535,20 @@ function saveProfile(){
   if(email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){showToast('Valid email required');return;}
   if((pw||pw2)&&pw!==pw2){showToast('Passwords do not match');return;}
   if(pw&&pw.length<6){showToast('Password must be at least 6 characters');return;}
-  const users=APP.users;const i=users.findIndex(x=>x.id===u.id);if(i<0)return;
-  users[i]=Object.assign({},users[i],{name,email,dept:el('pf-dept').value,avatar:name.substring(0,2).toUpperCase()});
-  if(pw)users[i].password=pw;
-  APP.users=users;APP.currentUser=users[i];
-  el('uname').textContent=users[i].name;el('urole').textContent=ROLE_LABELS[users[i].role]||users[i].role;
-  const av=el('uav');av.textContent=users[i].avatar;av.style.background=ROLE_COLORS[users[i].role]||'var(--brand)';
-  closeM('m-profile');buildNav();showToast('Profile updated');
+  const btn=document.querySelector('#m-profile .btn-brand');if(btn)btn.disabled=true;
+  const payload={name,email,dept:el('pf-dept').value};if(pw)payload.password=pw;
+  _apiFetch('/api/auth/profile',{method:'PUT',body:JSON.stringify(payload)}).then(function(data){
+    const updated=data.user||Object.assign({},u,payload,{avatar:name.substring(0,2).toUpperCase()});
+    const users=APP.users.slice();const i=users.findIndex(x=>String(x.id||'')===String(updated.id||u.id||''));
+    if(i>=0)users[i]=Object.assign({},users[i],updated);else users.push(updated);
+    try{localStorage.setItem('ap_users',JSON.stringify(_redactUsersForLocal(users)));}catch(_e){}
+    APP.currentUser=updated;
+    el('uname').textContent=updated.name;el('urole').textContent=ROLE_LABELS[updated.role]||updated.role;
+    const av=el('uav');av.textContent=updated.avatar||updated.name.substring(0,2).toUpperCase();av.style.background=ROLE_COLORS[updated.role]||'var(--brand)';
+    closeM('m-profile');buildNav();showToast('Profile updated');
+  }).catch(function(e){
+    showToast('Profile update failed: '+e.message,5000);
+  }).finally(function(){if(btn)btn.disabled=false;});
 }
 
 function populateDeptSel(sid){
@@ -2565,18 +2585,15 @@ function showLoginError(msg){
 
 function doLogin(){
   const uid=el('li-u').value.trim(), pwd=el('li-p').value;
-  ensureRoleDefaults();
   const rem=el('li-rem')?.checked||false;
-  if(rem){LS.set('ap_rem_u',uid);LS.set('ap_rem_p',pwd);}else{LS.del('ap_rem_u');LS.del('ap_rem_p');}
-  const findUser=function(){return APP.users.find(u=>u.loginId===uid&&u.password===pwd&&u.active);};
-  const user=findUser();
-  if(user){finishLogin(user);return;}
-  syncUsersFromApi().then(function(){
-    const cloudUser=findUser();
-    if(cloudUser){finishLogin(cloudUser);return;}
-    showLoginError();
-  }).catch(function(){
-    showLoginError();
+  if(rem){LS.set('ap_rem_u',uid);}else{LS.del('ap_rem_u');}
+  LS.del('ap_rem_p');
+  _apiFetch('/api/auth/login',{method:'POST',body:JSON.stringify({identity:uid,password:pwd})}).then(function(data){
+    LS.set(AUTH_TOKEN_KEY,data.token||'');
+    if(data.user)finishLogin(data.user);
+    else showLoginError();
+  }).catch(function(e){
+    showLoginError(e.message==='Invalid credentials'?'Invalid credentials. Please try again.':'Login failed: '+e.message);
   });
 }
 window.addEventListener('hashchange',()=>{const h=location.hash.slice(1);if(h&&APP.currentUser)navigate(h);});
@@ -2589,26 +2606,23 @@ document.addEventListener('DOMContentLoaded',()=>{
   // Set logo
   const logoSrc=LOGO_SRC;
   ['login-logo','sb-logo'].forEach(id=>{const i=el(id);if(i)i.src=logoSrc;});
-  ensureRoleDefaults();
-  // Auto-login from persisted session
-  const saved=APP.currentUser;
-  if(saved){
-    const user=APP.users.find(u=>u.id===saved.id&&u.active);
-    if(user){
+  // Auto-login from persisted session token
+  const saved=APP.currentUser, token=LS.get(AUTH_TOKEN_KEY,'');
+  if(saved&&token){
+    _apiFetch('/api/auth/me').then(function(data){
+      const user=data.user||saved;
       el('login-screen').style.display='none';
       el('app').classList.remove('hidden');
       APP.currentUser=user;
       initApp();
-      return;
-    }
+    }).catch(function(){APP.currentUser=null;LS.del(AUTH_TOKEN_KEY);});
   }
   // Enter key on login
   ['li-u','li-p'].forEach(id=>el(id)?.addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();}));
   el('forgot-btn')?.addEventListener('click',openForgotModal);
   // Restore remembered credentials
-  const remU=LS.get('ap_rem_u','');const remP=LS.get('ap_rem_p','');
-  if(remU){el('li-u').value=remU;el('li-p').value=remP;var remCb=el('li-rem');if(remCb)remCb.checked=true;}
-  syncUsersFromApi().catch(function(e){console.warn('Login user sync skipped:',e.message);});
+  const remU=LS.get('ap_rem_u','');LS.del('ap_rem_p');
+  if(remU){el('li-u').value=remU;var remCb=el('li-rem');if(remCb)remCb.checked=true;}
   LS.set('ap_show_creds',false);
 });
 
@@ -2616,6 +2630,7 @@ function doLogout(){
   saveAS();
   APP.currentUser=null;
   LS.del('ap_cu');
+  LS.del(AUTH_TOKEN_KEY);
   el('app').classList.add('hidden');
   el('login-screen').style.display='flex';
   el('li-p').value='';
@@ -2626,6 +2641,8 @@ function doLogout(){
 // ═══════════════════════════════════════════════════
 function ensureRoleDefaults(){
   const users=APP.users;let changed=false;
+  if(!Array.isArray(users)||!users.length)return;
+  if(!users.some(u=>u.role==='admin'))return;
   if(!users.some(u=>u.role==='manager')){
     users.push({id:'u_mgr_'+Date.now(),loginId:'manager',password:'Manager@123',name:'Department Manager',role:'manager',dept:'STR',email:'manager@onepws.com',active:true,avatar:'DM'});
     changed=true;
@@ -5440,9 +5457,9 @@ function saveSystemSettings(){
 }
 function savePermissions(){PERMS=normalizePermissions(permissionsPayload());LS.set('ap_permissions',permissionsPayload());_permissionsDirty=false;buildNav();showToast('✅ Permissions saved and synced');}
 function togglePerm(role,page,val){if(role==='admin')return;if(!PERMS[role])PERMS[role]={};PERMS[role][page]=val?1:0;_permissionsDirty=true;buildNav();showToast('Permission updated. Click Save Permissions to sync.');}
-function openUserModal(id){const u=id?APP.users.find(x=>x.id===id):null;el('usr-mtitle').textContent=u?'Edit User':'Add User';el('usr-name').value=u?.name||'';el('usr-lid').value=u?.loginId||'';el('usr-pw').value=u?.password||'';el('usr-role').value=u?.role||'auditor';el('usr-email').value=u?.email||'';el('usr-eid').value=u?.id||'';populateDeptSel('usr-dept');if(u)el('usr-dept').value=u.dept||'';openM('m-user');}
+function openUserModal(id){const u=id?APP.users.find(x=>x.id===id):null;el('usr-mtitle').textContent=u?'Edit User':'Add User';el('usr-name').value=u?.name||'';el('usr-lid').value=u?.loginId||'';el('usr-pw').value='';el('usr-role').value=u?.role||'auditor';el('usr-email').value=u?.email||'';el('usr-eid').value=u?.id||'';populateDeptSel('usr-dept');if(u)el('usr-dept').value=u.dept||'';openM('m-user');}
 function editUser(id){openUserModal(id);}
-function saveUser(){const n=el('usr-name').value.trim(),lid=el('usr-lid').value.trim(),pw=el('usr-pw').value.trim();const eidVal=el('usr-eid').value;const oldUser=eidVal?APP.users.find(u=>u.id===eidVal):null;const oldName=oldUser?.name||'';if(!n||!lid){showToast('⚠ Name and Login ID required');return;}const eid=el('usr-eid').value;const U=APP.users;const conflict=U.find(u=>u.loginId===lid&&u.id!==eid);if(conflict){showToast('⚠ Login ID exists');return;}const obj={name:n,loginId:lid,password:pw||'changeme',role:el('usr-role').value,dept:el('usr-dept').value,email:el('usr-email').value.trim(),active:true,avatar:n.substring(0,2).toUpperCase()};if(eid){const i=U.findIndex(u=>u.id===eid);if(i>=0){obj.id=eid;obj.active=U[i].active;U[i]=obj;}}else{obj.id='u'+Date.now();U.push(obj);}APP.users=U;
+function saveUser(){const n=el('usr-name').value.trim(),lid=el('usr-lid').value.trim(),pw=el('usr-pw').value.trim();const eidVal=el('usr-eid').value;const oldUser=eidVal?APP.users.find(u=>u.id===eidVal):null;const oldName=oldUser?.name||'';if(!n||!lid){showToast('⚠ Name and Login ID required');return;}if(!eidVal&&!pw){showToast('⚠ Password required for new user');return;}const eid=el('usr-eid').value;const U=APP.users;const conflict=U.find(u=>u.loginId===lid&&u.id!==eid);if(conflict){showToast('⚠ Login ID exists');return;}const obj={name:n,loginId:lid,role:el('usr-role').value,dept:el('usr-dept').value,email:el('usr-email').value.trim(),active:true,avatar:n.substring(0,2).toUpperCase()};if(pw)obj.password=pw;if(eid){const i=U.findIndex(u=>u.id===eid);if(i>=0){obj.id=eid;obj.active=U[i].active;U[i]=obj;}}else{obj.id='u'+Date.now();U.push(obj);}APP.users=U;
   // Sync name changes to auditors and login credentials
   if(eid){
     const auds=APP.auditors;const matchAud=auds.find(a=>a.email===obj.email||a.name===oldName);
@@ -5491,9 +5508,27 @@ function mergeTeamData(evt){
   };
   reader.readAsText(file);
 }
+function resetAllAfterPassword(pw){
+  _apiFetch('/api/auth/login',{method:'POST',body:JSON.stringify({identity:APP.currentUser&&APP.currentUser.loginId,password:pw})}).then(function(data){
+    if(!data.user||data.user.role!=='admin'){showToast('Incorrect password. Reset denied.');return;}
+    if(!confirm('WARNING: This will permanently delete ALL data. Download a backup first using Export Full Backup.\n\nClick OK to proceed with FULL RESET.'))return;
+    if(!_apiReady){showToast('Cloud sync is offline. Reset denied for data safety.');return;}
+    _syncInitDone=false;
+    showToast('Clearing MongoDB data...');
+    _apiFetch('/api/sync',{method:'DELETE'}).then(function(){
+      Object.keys(localStorage).filter(k=>k.startsWith('ap_')||k.startsWith('imp_')).forEach(k=>localStorage.removeItem(k));
+      showToast('All data reset (local + cloud). Reloading...');
+      setTimeout(function(){location.reload();},1500);
+    }).catch(function(e){
+      console.warn('MongoDB reset error:',e);
+      showToast('Reset failed: '+e.message);
+    });
+  }).catch(function(){showToast('Incorrect password. Reset denied.');});
+}
 function resetAll(){
   const pw=prompt('Enter Master Admin password to confirm full data reset:');
   if(!pw){showToast('Reset cancelled');return;}
+  return resetAllAfterPassword(pw);
   const adminUser=APP.users.find(u=>u.role==='admin');
   if(!adminUser||pw!==adminUser.password){showToast('❌ Incorrect password. Reset denied.');return;}
   if(!confirm('WARNING: This will permanently delete ALL data. Download a backup first using Export Full Backup.\n\nClick OK to proceed with FULL RESET.')){return;}
