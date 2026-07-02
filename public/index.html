@@ -634,6 +634,7 @@ input:focus,select:focus,textarea:focus{border-color:var(--brand);background:var
 const LOGO_SRC = 'assets/onepws-dark-logo-scaled.png';
 const OCP_PDF_SRC = 'assets/OCP_Manual_v4.3_Complete.pdf';
 const PUBLIC_APP_URL = 'https://audit.onepws.com';
+const AUDITPRO_CLIENT_VERSION = 'AuditPro-Web/2026-07-02-sync-guard-2';
 
 // ═══════════════════════════════════════════════════
 // LOCALSTORAGE HELPERS
@@ -687,7 +688,7 @@ function _redactUsersForLocal(v){
 
 function _apiFetch(path,opts){
   opts=opts||{};
-  opts.headers=Object.assign({'Content-Type':'application/json'},opts.headers||{});
+  opts.headers=Object.assign({'Content-Type':'application/json','X-AuditPro-Client':AUDITPRO_CLIENT_VERSION},opts.headers||{});
   var token=LS.get(AUTH_TOKEN_KEY,'');
   if(_isProtectedApiPath(path)&&!_hasUsableAuthToken()){
     return Promise.reject(_apiError('Authentication required',401));

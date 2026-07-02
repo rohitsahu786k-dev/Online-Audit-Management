@@ -24,6 +24,8 @@ const AUTH_SECRET = process.env.AUTH_SECRET || process.env.SESSION_SECRET || cry
   .update([MONGODB_DB, 'onepws-auditpro-auth-v2'].join('|'))
   .digest('hex');
 const PASSWORD_HASH_ITERATIONS = Number(process.env.PASSWORD_HASH_ITERATIONS || 120000);
+const REQUIRED_SYNC_CLIENT = 'AuditPro-Web/2026-07-02-sync-guard-2';
+const SYNC_READ_THROTTLE_MS = 20 * 1000;
 
 const SYNC_KEYS = [
   'ap_users',
@@ -58,6 +60,7 @@ let mongoClient;
 let appData;
 let mongoConnectPromise;
 let mailer;
+const recentSyncReads = new Map();
 
 app.disable('x-powered-by');
 app.use((req, res, next) => {
@@ -83,6 +86,62 @@ function assertSyncKey(key) {
     err.statusCode = 400;
     throw err;
   }
+}
+
+function stableSyncStringify(value) {
+  if (value === undefined) return '"__undefined__"';
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableSyncStringify).join(',')}]`;
+  return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableSyncStringify(value[key])}`).join(',')}}`;
+}
+
+function canonicalSyncValue(key, value) {
+  if (key === 'ap_local_storage_backup' && value && typeof value === 'object') {
+    return {
+      keys: Array.isArray(value.keys) ? value.keys.slice().sort() : [],
+      data: value.data && typeof value.data === 'object' ? value.data : {}
+    };
+  }
+
+  if (key === 'ap_audit_drafts' && Array.isArray(value)) {
+    return value.map(row => {
+      if (!row || typeof row !== 'object') return row;
+      const draft = { ...row };
+      delete draft.updatedAt;
+      if (draft.session && typeof draft.session === 'object') {
+        draft.session = { ...draft.session };
+        delete draft.session.at;
+      }
+      return draft;
+    });
+  }
+
+  return value;
+}
+
+function syncValuesEqual(key, a, b) {
+  return stableSyncStringify(canonicalSyncValue(key, a)) === stableSyncStringify(canonicalSyncValue(key, b));
+}
+
+function isProtectedSyncPath(pathname) {
+  return pathname === '/api/sync' || pathname.startsWith('/api/sync/');
+}
+
+function hasCurrentSyncClient(req) {
+  return String(req.headers['x-auditpro-client'] || '') === REQUIRED_SYNC_CLIENT;
+}
+
+function throttleSyncRead(req, res) {
+  const key = String((req.authUser && (req.authUser.id || req.authUser.loginId)) || req.ip || 'anonymous');
+  const now = Date.now();
+  const last = recentSyncReads.get(key) || 0;
+  recentSyncReads.set(key, now);
+  if (last && now - last < SYNC_READ_THROTTLE_MS) {
+    res.setHeader('Retry-After', String(Math.ceil((SYNC_READ_THROTTLE_MS - (now - last)) / 1000)));
+    res.json({ ok: true, data: {}, throttled: true });
+    return true;
+  }
+  return false;
 }
 
 async function getCollection() {
@@ -1116,6 +1175,9 @@ async function requireApiAuth(req, res, next) {
   const user = await findActiveUserFromToken(req);
   if (!user) return res.status(401).json({ ok: false, error: 'Authentication required' });
   req.authUser = user;
+  if (isProtectedSyncPath(req.path) && !hasCurrentSyncClient(req)) {
+    return res.status(401).json({ ok: false, error: 'Client update required. Please refresh the app.' });
+  }
   return next();
 }
 
@@ -1232,6 +1294,7 @@ app.get('/api/sync/keys', (_req, res) => {
 });
 
 app.get('/api/sync', wrapAsync(async (_req, res) => {
+  if (throttleSyncRead(_req, res)) return;
   const collection = await getCollection();
   const rows = await collection.find({ key: { $in: SYNC_KEYS } }).toArray();
   const data = {};
@@ -1260,10 +1323,15 @@ app.put('/api/sync/:key', wrapAsync(async (req, res) => {
   const collection = await getCollection();
   const now = new Date();
   let incomingValue = req.body && Object.prototype.hasOwnProperty.call(req.body, 'value') ? req.body.value : null;
+  let currentRow = null;
+  const loadCurrent = async () => {
+    if (!currentRow) currentRow = await collection.findOne({ key });
+    return currentRow;
+  };
   if (key === 'ap_users' || key === 'ap_permissions') requireAdmin(req);
 
   if (key === 'ap_email_logs') {
-    const current = await collection.findOne({ key });
+    const current = await loadCurrent();
     const replace = Boolean(req.body && req.body.replace);
     const clearedAt = replace && Array.isArray(incomingValue) && incomingValue.length === 0
       ? now
@@ -1271,6 +1339,10 @@ app.put('/api/sync/:key', wrapAsync(async (req, res) => {
     const value = replace
       ? (Array.isArray(incomingValue) ? incomingValue : [])
       : mergeEmailLogs(current && current.value, incomingValue, clearedAt);
+
+    if (!replace && current && syncValuesEqual(key, current.value, value)) {
+      return res.json({ ok: true, key, skipped: true, updatedAt: current.updatedAt || null, count: value.length });
+    }
 
     await collection.updateOne(
       { key },
@@ -1290,31 +1362,36 @@ app.put('/api/sync/:key', wrapAsync(async (req, res) => {
   }
 
   if (key === 'ap_finds') {
-    const current = await collection.findOne({ key });
+    const current = await loadCurrent();
     incomingValue = mergeFindingsForSync(current && current.value, incomingValue);
   }
 
   if (key === 'ap_users') {
-    const current = await collection.findOne({ key });
+    const current = await loadCurrent();
     incomingValue = mergeUsersForSync(current && current.value, incomingValue);
   }
 
   if (key === 'ap_audit_drafts') {
-    const current = await collection.findOne({ key });
+    const current = await loadCurrent();
     incomingValue = mergeAuditDraftsForSync(current && current.value, incomingValue);
   }
 
   if (key === 'ap_completed_audits') {
     const [current, findingsRow] = await Promise.all([
-      collection.findOne({ key }),
+      loadCurrent(),
       collection.findOne({ key: 'ap_finds' })
     ]);
     incomingValue = mergeCompletedAuditsForSync(current && current.value, incomingValue, findingsRow && findingsRow.value);
   }
 
   if (key === 'ap_notifs') {
-    const current = await collection.findOne({ key });
+    const current = await loadCurrent();
     incomingValue = mergeNotificationsForSync(current && current.value, incomingValue);
+  }
+
+  const current = await loadCurrent();
+  if (current && syncValuesEqual(key, current.value, incomingValue)) {
+    return res.json({ ok: true, key, skipped: true, updatedAt: current.updatedAt || null });
   }
 
   await collection.updateOne(
@@ -1341,10 +1418,13 @@ app.post('/api/sync/bulk', wrapAsync(async (req, res) => {
 
   const collection = await getCollection();
   const now = new Date();
+  const currentRows = new Map();
+  const getCurrent = async key => {
+    if (!currentRows.has(key)) currentRows.set(key, await collection.findOne({ key }));
+    return currentRows.get(key);
+  };
   for (const key of keys) {
-    const current = key === 'ap_finds' || key === 'ap_audit_drafts' || key === 'ap_email_logs' || key === 'ap_users' || key === 'ap_completed_audits' || key === 'ap_notifs'
-      ? await collection.findOne({ key })
-      : null;
+    const current = await getCurrent(key);
     if (key === 'ap_finds') {
       items[key] = mergeFindingsForSync(current && current.value, items[key]);
     }
@@ -1371,7 +1451,16 @@ app.post('/api/sync/bulk', wrapAsync(async (req, res) => {
       items[key] = mergeNotificationsForSync(current && current.value, items[key]);
     }
   }
-  await collection.bulkWrite(keys.map(key => ({
+  const writeKeys = keys.filter(key => {
+    const current = currentRows.get(key);
+    return !(current && syncValuesEqual(key, current.value, items[key]));
+  });
+
+  if (!writeKeys.length) {
+    return res.json({ ok: true, count: 0, skipped: keys.length, updatedAt: now });
+  }
+
+  await collection.bulkWrite(writeKeys.map(key => ({
     updateOne: {
       filter: { key },
       update: {
@@ -1386,7 +1475,7 @@ app.post('/api/sync/bulk', wrapAsync(async (req, res) => {
     }
   })));
 
-  res.json({ ok: true, count: keys.length, updatedAt: now });
+  res.json({ ok: true, count: writeKeys.length, skipped: keys.length - writeKeys.length, updatedAt: now });
 }));
 
 app.delete('/api/sync/:key', wrapAsync(async (req, res) => {

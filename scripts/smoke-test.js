@@ -6,6 +6,7 @@ const fs = require('fs');
 const APP_URL = process.env.APP_URL;
 const SMOKE_LOGIN_ID = process.env.SMOKE_LOGIN_ID || 'admin';
 const SMOKE_PASSWORD = process.env.SMOKE_PASSWORD || 'Admin123!';
+const AUDITPRO_CLIENT_VERSION = 'AuditPro-Web/2026-07-02-sync-guard-2';
 let authToken = '';
 const BROWSER_CANDIDATES = [
   process.env.PLAYWRIGHT_CHROME,
@@ -22,6 +23,7 @@ if (!APP_URL) {
 async function api(path, opts) {
   opts = opts || {};
   opts.headers = Object.assign({}, opts.headers || {});
+  opts.headers['X-AuditPro-Client'] = AUDITPRO_CLIENT_VERSION;
   if (authToken) opts.headers.Authorization = `Bearer ${authToken}`;
   const res = await fetch(`${APP_URL}${path}`, opts);
   const data = await res.json().catch(() => ({}));
