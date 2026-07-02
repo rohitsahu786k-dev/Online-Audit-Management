@@ -1057,6 +1057,11 @@ function _statusChangeNewerThanReview(changed,reviewed){
   if(s.time&&r.time)return s.time>r.time;
   return false;
 }
+function _statusChangeNewerThanSubmission(changed,submitted){
+  var s=_statusChangeSignal(changed),c=_closureSubmissionSignal(submitted);
+  if(s.time&&c.time)return s.time>c.time;
+  return false;
+}
 function findingWorkflowStatus(f){
   if(!f||typeof f!=='object')return '';
   var status=String(f.status||'').toLowerCase();
@@ -1081,8 +1086,8 @@ function _chooseFindingForSync(local,remote){
   if(lp||rp){
     if(lp&&rr)return _submissionNewerThanReview(local,remote)?_mergeFindingWorkflowData(local,remote):_mergeFindingWorkflowData(remote,local);
     if(rp&&lr)return _submissionNewerThanReview(remote,local)?_mergeFindingWorkflowData(remote,local):_mergeFindingWorkflowData(local,remote);
-    if(lp&&!rp&&!rr)return _mergeFindingWorkflowData(local,remote);
-    if(rp&&!lp&&!lr)return _mergeFindingWorkflowData(remote,local);
+    if(lp&&!rp&&!rr)return _statusChangeNewerThanSubmission(remote,local)?_mergeFindingWorkflowData(remote,local):_mergeFindingWorkflowData(local,remote);
+    if(rp&&!lp&&!lr)return _statusChangeNewerThanSubmission(local,remote)?_mergeFindingWorkflowData(local,remote):_mergeFindingWorkflowData(remote,local);
     if(lp&&rp){
       var lm=_workflowMeaningfulTime(local),rm=_workflowMeaningfulTime(remote);
       return _mergeFindingWorkflowData(rm>lm?remote:local,rm>lm?local:remote);
@@ -2112,6 +2117,17 @@ function _dedupeActivityRows(rows){
 function touchFinding(f){
   if(f&&typeof f==='object')f.updatedAt=new Date().toISOString();
   return f;
+}
+function supersedeClosureSubmissionForStatus(f,status,reason){
+  var next=String(status||'').toLowerCase();
+  if(!f||!_hasUnreviewedClosureSubmission(f)||next==='pending-closure'||next==='closed')return;
+  var now=new Date();
+  f.decision='reject';
+  f.decisionComments=reason||'Reopened by reviewer';
+  f.decisionDate=now.toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'});
+  f.decisionAt=now.toISOString();
+  f.auditClosureDate=null;
+  f.closedAt=null;
 }
 function renderCapaActivityLog(f){
   var todayKey=_localDateKeyFromDate(new Date());
@@ -4628,7 +4644,9 @@ function saveFindingRecord(){
     capaStatus:status==='pending-closure'?'submitted':status
   };
   rows[idx]=Object.assign({},f,patch);
+  supersedeClosureSubmissionForStatus(rows[idx],status,'Reopened from finding editor');
   touchFinding(rows[idx]);
+  rows[idx].statusChangedAt=rows[idx].updatedAt;
   rows[idx].activityLog=Array.isArray(rows[idx].activityLog)?rows[idx].activityLog:[];
   rows[idx].activityLog.push({user:APP.currentUser?.name||'System',action:'Finding record edited',ts:new Date().toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'})});
   LS.set('ap_finds',normalizeFindingsData(rows).value);
@@ -4821,7 +4839,9 @@ function updateCapaStatus(key,status,selectEl){
     showToast('Only Master Admin can force close without review');
     return;
   }
-  f.status=status;f.capaStatus=status==='pending-closure'?'submitted':status;f.activityLog=f.activityLog||[];touchFinding(f);
+  f.status=status;f.capaStatus=status==='pending-closure'?'submitted':status;f.activityLog=f.activityLog||[];
+  supersedeClosureSubmissionForStatus(f,status,'Reopened by '+(APP.currentUser?.name||'reviewer'));
+  touchFinding(f);
   f.statusChangedAt=f.updatedAt;
   if(status==='pending-closure'){f.decision=null;f.decisionComments='';f.decisionDate=null;f.auditClosureDate=null;f.closedAt=null;}
   if(status==='closed'){

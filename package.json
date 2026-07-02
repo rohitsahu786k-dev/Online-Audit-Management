@@ -8,6 +8,7 @@
     "start": "node server.js",
     "dev": "nodemon server.js",
     "import:backup": "node scripts/import-backup.js",
+    "test:capa-status": "node scripts/capa-status-regression-test.js",
     "test:smoke": "node scripts/smoke-test.js"
   },
   "dependencies": {
