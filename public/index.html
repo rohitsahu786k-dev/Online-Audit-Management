@@ -1601,6 +1601,9 @@ function _stopApiSync(){
 function _isAuthError(err){
   return err&&(err.status===401||String(err.message||'').toLowerCase().indexOf('authentication required')>-1);
 }
+function _isClientUpdateError(err){
+  return err&&(err.status===426||String(err.message||'').toLowerCase().indexOf('client update required')>-1);
+}
 function _scheduleNextSyncPoll(delay){
   if(!_apiReady||!_syncInitDone)return;
   if(_syncPollTimer)clearTimeout(_syncPollTimer);
@@ -1714,6 +1717,7 @@ function initApiSync(){
     _syncStatus='synced';_updateSyncUI();
     _scheduleNextSyncPoll(SYNC_POLL_INTERVAL_MS);
   }).catch(function(err){
+    if(_isClientUpdateError(err)){_stopApiSync();_syncStatus='offline';_updateSyncUI();showToast('App updated. Please refresh once.',6000);return;}
     if(_isAuthError(err)){_clearAuthState(true);return;}
     console.warn('Initial sync failed:',err);
     _syncStatus='offline';_updateSyncUI();
@@ -1792,6 +1796,7 @@ function pollApiSync(){
     if(Object.keys(_pendingSyncItems()).length)flushPendingLocalSync('poll').catch(function(){});
     _syncStatus='synced';_updateSyncUI();
   }).catch(function(err){
+    if(_isClientUpdateError(err)){_stopApiSync();_syncStatus='offline';_updateSyncUI();showToast('App updated. Please refresh once.',6000);return;}
     if(_isAuthError(err)){_clearAuthState(true);return;}
     console.warn('Poll sync failed:',err.message);
     _syncStatus='offline';_updateSyncUI();

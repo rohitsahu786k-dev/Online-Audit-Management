@@ -1176,7 +1176,7 @@ async function requireApiAuth(req, res, next) {
   if (!user) return res.status(401).json({ ok: false, error: 'Authentication required' });
   req.authUser = user;
   if (isProtectedSyncPath(req.path) && !hasCurrentSyncClient(req)) {
-    return res.status(401).json({ ok: false, error: 'Client update required. Please refresh the app.' });
+    return res.status(426).json({ ok: false, error: 'Client update required. Please refresh the app.' });
   }
   return next();
 }
