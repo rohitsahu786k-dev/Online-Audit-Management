@@ -2253,13 +2253,14 @@ function _activityDayLabel(dateKey){
   return d?d.toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}):dateKey;
 }
 function _dedupeActivityRows(rows){
-  var seen={},seenAutoDelayDays={},out=[];
+  var seen={},seenAutoDelay={},out=[];
   (rows||[]).forEach(function(row){
     var l=row.log||{};
     var dateKey=row.dateKey||_activityLogDateKey(l)||'undated';
     if(_isAutoDelayActivity(l)){
-      if(seenAutoDelayDays[dateKey])return;
-      seenAutoDelayDays[dateKey]=true;
+      var autoKey=String(l.action||'auto-delay').toLowerCase();
+      if(seenAutoDelay[autoKey])return;
+      seenAutoDelay[autoKey]=true;
     }
     var key=[dateKey,l.user||'System',l.action||'Updated',l.ts||l.at||l.updatedAt||''].join('|');
     if(seen[key])return;
@@ -2267,6 +2268,17 @@ function _dedupeActivityRows(rows){
     out.push(row);
   });
   return out;
+}
+function compactAutoDelayActivityLog(logs){
+  var rows=Array.isArray(logs)?logs:[];
+  var seen=false,changed=false;
+  var out=rows.filter(function(l){
+    if(!_isAutoDelayActivity(l))return true;
+    if(seen){changed=true;return false;}
+    seen=true;
+    return true;
+  });
+  return changed?out:rows;
 }
 function touchFinding(f){
   if(f&&typeof f==='object')f.updatedAt=new Date().toISOString();
@@ -2846,14 +2858,26 @@ document.addEventListener('DOMContentLoaded',()=>{
   ['login-logo','sb-logo'].forEach(id=>{const i=el(id);if(i)i.src=logoSrc;});
   // Auto-login from persisted session token
   const saved=APP.currentUser, token=LS.get(AUTH_TOKEN_KEY,'');
-  if(saved&&token&&_hasUsableAuthToken()){
+  if(token&&_hasUsableAuthToken()){
     _apiFetch('/api/auth/me').then(function(data){
       const user=data.user||saved;
+      if(!user){_clearAuthState(true);return;}
       el('login-screen').style.display='none';
       el('app').classList.remove('hidden');
       APP.currentUser=user;
       initApp();
-    }).catch(function(e){if(_isAuthError(e))_clearAuthState(true);else showLoginError('Session check failed. Please sign in again.');});
+    }).catch(function(e){
+      if(_isAuthError(e)){_clearAuthState(true);return;}
+      if(saved){
+        el('login-screen').style.display='none';
+        el('app').classList.remove('hidden');
+        APP.currentUser=saved;
+        initApp();
+        showToast('Session restored; sync will retry automatically.',4500);
+        return;
+      }
+      showLoginError('Session check failed. Please sign in again.');
+    });
   }else if(saved||token){
     _clearAuthState(true);
   }
@@ -3214,22 +3238,22 @@ function processOverdueFindings(opts){
     if(status==='closed'||!isFindingPastDue(f))return f;
     if(status==='pending-closure'||capaStatus==='submitted'||findingWorkflowStatus(f)==='pending-closure'||_hasUnreviewedClosureSubmission(f))return f;
     var item=Object.assign({},f);
+    item.activityLog=compactAutoDelayActivityLog(item.activityLog);
+    var hasAutoDelayLog=item.activityLog.some(_isAutoDelayActivity);
     if(status!=='delayed'){
       item.previousStatusBeforeDelay=f.status||'open';
       item.status='delayed';
       item.capaStatus='delayed';
       item.delayedAt=item.delayedAt||nowIso;
-      item.activityLog=Array.isArray(item.activityLog)?item.activityLog.slice():[];
-      var hasSameDayLog=item.activityLog.some(function(l){
-        return _isAutoDelayActivity(l)&&_activityLogDateKey(l)===_localDateKeyFromDate(new Date());
-      });
-      if(!hasSameDayLog){
+      if(!hasAutoDelayLog){
         item.activityLog.push({user:'System',action:'Auto status changed to Delayed (due date missed)',ts:stamp});
       }
       updated++;
       changed=true;
     }else if(item.capaStatus!=='delayed'){
       item.capaStatus='delayed';
+      changed=true;
+    }else if(item.activityLog!==f.activityLog){
       changed=true;
     }
     // ── Per-tier frequency enforcement ──
@@ -3638,11 +3662,16 @@ function renderDashboard(){
   ${(function(){
     // ═══ NC STATUS MATRIX BY DEPARTMENT (auto-updating) ═══
     const today=new Date();today.setHours(0,0,0,0);
-    const matrixDepts=visibleDepts.slice();
-    F.filter(f=>f.status!=='closed').forEach(function(f){
-      if(!matrixDepts.some(function(d){return findingMatchesDept(f,d);})){
-        var rec=deptRecordForFinding(f);
-        matrixDepts.push(rec||{code:deptCodeForFinding(f),name:deptNameForFinding(f)});
+    const auditedRows=completedAuditsSorted();
+    const auditedCodes=new Set(auditedRows.map(function(a){return String(a&&a.dept||'').trim();}).filter(Boolean));
+    const matrixDepts=visibleDepts.filter(function(d){return auditedCodes.has(d.code)||completedAuditsSorted(d.code).length>0;});
+    auditedRows.forEach(function(a){
+      var rec=deptRecordForValue(a&&a.dept)||deptRecordForValue(a&&a.deptName);
+      var row=rec||{code:String((a&&a.dept)||(a&&a.deptName)||'').trim(),name:String((a&&a.deptName)||(a&&a.dept)||'').trim()};
+      if(!row.code)return;
+      if(_isSpoc&&!deptValuesMatch(row.code,_spocDept)&&!deptValuesMatch(row.name,_spocDept))return;
+      if(!matrixDepts.some(function(d){return deptValuesMatch(d.code,row.code)||deptValuesMatch(d.name,row.name);})){
+        matrixDepts.push(row);
       }
     });
     const ncRows=matrixDepts.map(d=>{
