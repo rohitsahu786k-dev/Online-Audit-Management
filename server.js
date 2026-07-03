@@ -1176,7 +1176,7 @@ async function requireApiAuth(req, res, next) {
   if (!user) return res.status(401).json({ ok: false, error: 'Authentication required' });
   req.authUser = user;
   if (isProtectedSyncPath(req.path) && !hasCurrentSyncClient(req)) {
-    return res.status(426).json({ ok: false, error: 'Client update required. Please refresh the app.' });
+    res.setHeader('X-AuditPro-Client-Warning', 'refresh-recommended');
   }
   return next();
 }
@@ -1296,7 +1296,19 @@ app.get('/api/sync/keys', (_req, res) => {
 app.get('/api/sync', wrapAsync(async (_req, res) => {
   if (throttleSyncRead(_req, res)) return;
   const collection = await getCollection();
-  const rows = await collection.find({ key: { $in: SYNC_KEYS } }).toArray();
+  const rows = await collection.find({
+    key: { $in: SYNC_KEYS.filter(key => key !== 'ap_local_storage_backup') }
+  }).toArray();
+  if (_req.query && (_req.query.manifest === '1' || _req.query.meta === '1')) {
+    const data = {};
+    rows.forEach(row => {
+      data[row.key] = {
+        updatedAt: row.updatedAt,
+        updatedBy: row.updatedBy || 'system'
+      };
+    });
+    return res.json({ ok: true, data, manifest: true });
+  }
   const data = {};
   rows.forEach(row => {
     data[row.key] = {

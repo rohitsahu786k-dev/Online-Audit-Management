@@ -657,6 +657,7 @@ var SYNC_WRITE_DEBOUNCE_MS=1200;
 var LOCAL_BACKUP_SYNC_MIN_MS=10*60*1000;
 var _syncWriteTimers={};
 var _syncLastWriteText={};
+var _syncRemoteMeta={};
 var _syncPollInFlight=false;
 var _localBackupSyncTimer=null;
 var _lastLocalBackupDataText='';
@@ -840,6 +841,7 @@ function _writeSyncKeyNow(k,v,by){
     return {ok:true};
   }).catch(function(e){
     delete _syncLastWriteText[k];
+    if(_isClientUpdateError(e)){_handleClientUpdateRequired();return {queued:false,error:e.message};}
     _queueSyncItem(k,v);
     console.warn('Sync write queued:',e.message);
     _syncStatus='error';_updateSyncUI();
@@ -900,6 +902,7 @@ function flushPendingLocalSync(reason){
     _syncStatus='synced';_updateSyncUI();
     return res;
   }).catch(function(e){
+    if(_isClientUpdateError(e)){_handleClientUpdateRequired();return {ok:false,count:0,error:e.message};}
     console.warn('Pending local sync:',e.message);
     _syncStatus='error';_updateSyncUI();
     throw e;
@@ -920,6 +923,7 @@ function pushLocalStorageToMongo(reason){
     _syncStatus='synced';_updateSyncUI();
     return res;
   }).catch(function(e){
+    if(_isClientUpdateError(e)){_handleClientUpdateRequired();return {ok:false,count:0,error:e.message};}
     console.warn('Local push sync:',e.message);
     _syncStatus='error';_updateSyncUI();
     throw e;
@@ -1597,12 +1601,20 @@ function _stopApiSync(){
   if(_localBackupSyncTimer){clearTimeout(_localBackupSyncTimer);_localBackupSyncTimer=null;}
   Object.keys(_syncWriteTimers).forEach(function(k){clearTimeout(_syncWriteTimers[k]);delete _syncWriteTimers[k];});
   if(_executionAutosaveTimer){clearInterval(_executionAutosaveTimer);_executionAutosaveTimer=null;}
+  if(_emailSchedulerTimer){clearInterval(_emailSchedulerTimer);_emailSchedulerTimer=null;}
+  _emailSchedulerStarted=false;
 }
 function _isAuthError(err){
   return err&&(err.status===401||String(err.message||'').toLowerCase().indexOf('authentication required')>-1);
 }
 function _isClientUpdateError(err){
   return err&&(err.status===426||String(err.message||'').toLowerCase().indexOf('client update required')>-1);
+}
+function _handleClientUpdateRequired(){
+  _stopApiSync();
+  _syncStatus='offline';
+  _updateSyncUI();
+  showToast('App updated. Please refresh once.',6000);
 }
 function _scheduleNextSyncPoll(delay){
   if(!_apiReady||!_syncInitDone)return;
@@ -1620,6 +1632,7 @@ function initApiSync(){
     return _apiFetch('/api/sync');
   }).then(function(payload){
     var cloud=payload.data||{};
+    Object.keys(cloud).forEach(function(k){_syncRemoteMeta[k]=String(cloud[k]&&cloud[k].updatedAt||'');});
     var updated=false;
     var localPushItems={};
 
@@ -1708,6 +1721,7 @@ function initApiSync(){
     if(typeof repairCompletedAuditScores==='function')repairCompletedAuditScores();
     // Status update only on sync — email scheduler handles actual sending
     if(typeof processOverdueFindings==='function')processOverdueFindings({sendEmail:false,source:'initial-sync'});
+    if(typeof startEmailScheduler==='function')startEmailScheduler();
 
     if(updated){
       if(typeof renderPage==='function'&&typeof APP!=='undefined')renderPage(APP.currentPage);
@@ -1730,8 +1744,26 @@ function pollApiSync(){
   if(_syncPollInFlight)return;
   if(document.hidden){_scheduleNextSyncPoll(SYNC_POLL_INTERVAL_MS);return;}
   _syncPollInFlight=true;
-  _apiFetch('/api/sync').then(function(payload){
+  _apiFetch('/api/sync?manifest=1').then(function(payload){
+    var manifest=payload.data||{};
+    var changedKeys=Object.keys(manifest).filter(function(k){
+      return SYNC_KEYS.indexOf(k)>-1
+        && k!==LOCAL_STORAGE_BACKUP_KEY
+        && String(manifest[k]&&manifest[k].updatedAt||'')!==String(_syncRemoteMeta[k]||'');
+    });
+    if(!changedKeys.length)return {data:{},manifest:manifest};
+    return Promise.all(changedKeys.map(function(k){
+      return _apiFetch('/api/sync/'+encodeURIComponent(k)).then(function(row){return {key:k,row:row};});
+    })).then(function(rows){
+      var data={};
+      rows.forEach(function(item){
+        data[item.key]={value:item.row.value,updatedAt:item.row.updatedAt,updatedBy:item.row.updatedBy||'system'};
+      });
+      return {data:data,manifest:manifest};
+    });
+  }).then(function(payload){
     var cloud=payload.data||{};
+    var manifest=payload.manifest||{};
     Object.keys(cloud).forEach(function(k){
       if(SYNC_KEYS.indexOf(k)<0||!cloud[k])return;
       if(k===LOCAL_STORAGE_BACKUP_KEY)return;
@@ -1793,6 +1825,7 @@ function pollApiSync(){
         _refreshAfterSync(k);
       }
     });
+    Object.keys(manifest).forEach(function(k){_syncRemoteMeta[k]=String(manifest[k]&&manifest[k].updatedAt||'');});
     if(Object.keys(_pendingSyncItems()).length)flushPendingLocalSync('poll').catch(function(){});
     _syncStatus='synced';_updateSyncUI();
   }).catch(function(err){
@@ -1810,10 +1843,18 @@ function pollApiSync(){
 // Emails are ONLY sent by this scheduler — never on page load, navigation, or sync polls.
 // Runs once 60 seconds after login (to let data settle), then every 4 hours.
 var _emailSchedulerStarted=false;
+var _emailSchedulerTimer=null;
 function startEmailScheduler(){
   if(_emailSchedulerStarted)return;
   _emailSchedulerStarted=true;
-  console.log('[EmailScheduler] Browser auto-send disabled; use guarded manual automation runs.');
+  function runGuardedAutoEmails(){
+    if(!_apiReady||!APP.currentUser)return;
+    if(typeof runEmailScheduler==='function')runEmailScheduler('upcoming',{silent:true,source:'auto-upcoming'});
+    if(typeof processOverdueFindings==='function')processOverdueFindings({sendEmail:true,source:'auto-delayed',mode:'delayed',silent:true});
+  }
+  setTimeout(runGuardedAutoEmails,60000);
+  _emailSchedulerTimer=setInterval(runGuardedAutoEmails,4*60*60*1000);
+  console.log('[EmailScheduler] Guarded auto-send enabled with backend locks.');
 }
 
 // Start sync after DOM ready
@@ -3077,6 +3118,51 @@ function todayLocalDate(){
   var now=new Date();
   return new Date(now.getFullYear(),now.getMonth(),now.getDate());
 }
+function deptToken(value){
+  return String(value||'').trim()
+    .replace(/\([^)]*\)/g,' ')
+    .replace(/&/g,' and ')
+    .replace(/[^A-Za-z0-9]+/g,' ')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g,'');
+}
+function deptRecordForValue(value){
+  var raw=String(value||'').trim();
+  if(!raw||typeof APP==='undefined')return null;
+  var rawUp=raw.toUpperCase();
+  var token=deptToken(raw);
+  return (APP.depts||[]).find(function(d){
+    if(!d)return false;
+    return String(d.code||'').toUpperCase()===rawUp
+      || String(d.id||'').toUpperCase()===rawUp
+      || deptToken(d.name)===token
+      || deptToken(d.code)===token
+      || deptToken((d.name||'')+' '+(d.code||''))===token;
+  })||null;
+}
+function deptValuesMatch(a,b){
+  var da=deptRecordForValue(a),db=deptRecordForValue(b);
+  if(da&&db)return da.code===db.code;
+  if(da)return String(da.code||'').toUpperCase()===String(b||'').trim().toUpperCase()||deptToken(da.name)===deptToken(b);
+  if(db)return String(db.code||'').toUpperCase()===String(a||'').trim().toUpperCase()||deptToken(db.name)===deptToken(a);
+  return deptToken(a)&&deptToken(a)===deptToken(b);
+}
+function deptRecordForFinding(f){
+  return deptRecordForValue(f&&f.dept)||deptRecordForValue(f&&f.deptName)||null;
+}
+function deptCodeForFinding(f){
+  var d=deptRecordForFinding(f);
+  return d?d.code:String((f&&f.dept)||(f&&f.deptName)||'Other').trim();
+}
+function deptNameForFinding(f){
+  var d=deptRecordForFinding(f);
+  return d?d.name:String((f&&f.deptName)||(f&&f.dept)||'Other').trim();
+}
+function findingMatchesDept(f,d){
+  if(!f||!d)return false;
+  return deptValuesMatch(f.dept,d.code)||deptValuesMatch(f.deptName,d.code)||deptValuesMatch(f.dept,d.name)||deptValuesMatch(f.deptName,d.name);
+}
 function isFindingPastDue(f){
   var due=localDateOnly(f&&f.due);
   return !!(due&&due<todayLocalDate());
@@ -3086,14 +3172,14 @@ function escalationTierForDelay(days){
   return matrix.find(function(x){return days>=x.min&&days<=x.max;})||null;
 }
 function emailLockKeyForFinding(f,tier,type){
-  return [type||'delayed',f&&f.dept||'',tier&&tier.label||'',f&&String(f.ref||f.id||'')].join('|');
+  return [type||'delayed',deptCodeForFinding(f),tier&&tier.label||'',f&&String(f.ref||f.id||'')].join('|');
 }
 function emailLockItemsForRows(rows,tier,type){
   return (rows||[]).map(function(f){
     return {
       key:emailLockKeyForFinding(f,tier,type),
       frequencyDays:tier&&tier.frequencyDays||3,
-      meta:{ref:f&&f.ref||'',dept:f&&f.dept||'',tier:tier&&tier.label||'',type:type||'delayed'}
+      meta:{ref:f&&f.ref||'',dept:deptCodeForFinding(f),tier:tier&&tier.label||'',type:type||'delayed'}
     };
   });
 }
@@ -3117,7 +3203,7 @@ function commitEmailLocks(rows,tier,type,success){
 function processOverdueFindings(opts){
   opts=opts||{};
   if(typeof APP==='undefined'||!APP.currentUser)return {updated:0,emailQueued:0};
-  var allowEmailSend=!!(opts.sendEmail&&/^manual-/.test(String(opts.source||'')));
+  var allowEmailSend=!!(opts.sendEmail&&/^(manual|auto)-/.test(String(opts.source||'')));
   var list=APP.findings||[];
   var nowIso=new Date().toISOString();
   var stamp=new Date().toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'});
@@ -3179,7 +3265,7 @@ function processOverdueFindings(opts){
   if(emailRows.length&&allowEmailSend&&typeof sendTemplateEmail==='function'){
     // Group findings by dept, further split by escalation tier
     var groups={};
-    emailRows.forEach(function(f){if(f&&f.dept)(groups[f.dept]=groups[f.dept]||[]).push(f);});
+    emailRows.forEach(function(f){var code=deptCodeForFinding(f);if(code)(groups[code]=groups[code]||[]).push(f);});
     Object.keys(groups).forEach(function(dept){
       var deptFindings=groups[dept];
       // Each finding may be in a different escalation tier; send per tier so recipients are correct
@@ -3292,12 +3378,20 @@ function splitEmailList(value){
 }
 function joinEmailList(value){return splitEmailList(value).join(', ');}
 function spocEmails(deptCode){
-  const em=(APP.emailMaster||[]).find(x=>x.deptCode===deptCode&&x.status!=='inactive');
-  const emails=splitEmailList(em?.email).concat(APP.users.filter(u=>u.active!==false&&u.email&&u.role==='spoc'&&u.dept===deptCode).map(u=>u.email));
+  const em=deptEmailRecord(deptCode);
+  const dept=deptRecordForValue(deptCode);
+  const code=dept?dept.code:deptCode;
+  const emails=splitEmailList(em?.email).concat(APP.users.filter(u=>u.active!==false&&u.email&&u.role==='spoc'&&deptValuesMatch(u.dept,code)).map(u=>u.email));
   return [...new Set(emails)];
 }
-function deptEmailRecord(deptCode){return (APP.emailMaster||[]).find(x=>x.deptCode===deptCode&&x.status!=='inactive')||{};}
-function deptManagerEmails(deptCode){const r=deptEmailRecord(deptCode);return [...new Set(splitEmailList(r.reportingEmail).concat(APP.users.filter(u=>u.active!==false&&u.email&&u.role==='manager'&&u.dept===deptCode).map(u=>u.email)))];}
+function deptEmailRecord(deptCode){
+  const dept=deptRecordForValue(deptCode);
+  const code=dept?dept.code:String(deptCode||'').trim();
+  return (APP.emailMaster||[]).find(function(x){
+    return x&&x.status!=='inactive'&&(deptValuesMatch(x.deptCode,code)||deptValuesMatch(x.department,code)||deptValuesMatch(x.department,deptCode));
+  })||{};
+}
+function deptManagerEmails(deptCode){const r=deptEmailRecord(deptCode);const dept=deptRecordForValue(deptCode);const code=dept?dept.code:deptCode;return [...new Set(splitEmailList(r.reportingEmail).concat(APP.users.filter(u=>u.active!==false&&u.email&&u.role==='manager'&&deptValuesMatch(u.dept,code)).map(u=>u.email)))];}
 function deptHodEmails(deptCode){const r=deptEmailRecord(deptCode);return [...new Set(splitEmailList(r.hodEmail))];}
 function deptManagementEmails(deptCode){const r=deptEmailRecord(deptCode);return [...new Set(splitEmailList(r.managementEmail).concat(managementEmails()))];}
 function masterAdminEmails(){return [...new Set(APP.users.filter(u=>u.active!==false&&u.email&&u.role==='admin').map(u=>u.email))];}
@@ -3418,7 +3512,7 @@ function renderDashboard(){
   const visibleDepts=_isSpoc?APP.depts.filter(d=>d.code===_spocDept):APP.depts;
   const overallAuditScore=orgLatestAuditScore(visibleDepts);
   const deptScores=visibleDepts.map(d=>{
-    const df=F.filter(f=>f.dept===d.code);
+    const df=F.filter(f=>findingMatchesDept(f,d));
     const counts=auditFindingCounts(df);
     const scoreInfo=latestDeptAuditScore(d.code);
     const score=scoreInfo&&typeof scoreInfo.score==='number'?scoreInfo.score:null;
@@ -3497,13 +3591,18 @@ function renderDashboard(){
       <div class="ch"><span class="dot" style="background:var(--purple)"></span>Department-wise Root Cause Analysis</div>
       ${(function(){
         const rcMap={};
+        const rowMap={};
         F.forEach(f=>{
-          const dept=f.deptName||f.dept||'Other';
+          const deptRec=deptRecordForFinding(f);
+          const dept=deptRec?deptRec.name:deptNameForFinding(f);
+          const deptKey=deptRec?deptRec.code:deptCodeForFinding(f);
           const rc=canonicalRootCauseName(f.rc||f.rootCause||'Unclassified');
-          const key=dept+'|'+rc;
+          if(!rowMap[deptKey])rowMap[deptKey]={key:deptKey,name:dept,total:0};
+          rowMap[deptKey].total++;
+          const key=deptKey+'|'+rc;
           rcMap[key]=(rcMap[key]||0)+1;
         });
-        const depts=[...new Set(F.map(f=>f.deptName||f.dept||'Other'))].slice(0,8);
+        const depts=Object.values(rowMap).sort(function(a,b){return b.total-a.total||a.name.localeCompare(b.name);});
         const cats=dashboardRootCauseCategories(F);
         const catColors=['#c0392b','#2563eb','#d97706','#0d9488','#7c3aed','#16a34a','#8b92a8','#be123c','#0f766e','#4f46e5','#a16207','#15803d','#7e22ce','#475569'];
         if(!F.length)return '<div class="txs td">No findings data — conduct audits to see root cause analysis.</div>';
@@ -3511,10 +3610,10 @@ function renderDashboard(){
         depts.map(function(d){
           var total=0;
           var cells=cats.map(function(ct,ci){
-            var key=d+'|'+ct;var v=rcMap[key]||0;total+=v;
+            var key=d.key+'|'+ct;var v=rcMap[key]||0;total+=v;
             return '<td style="text-align:center;font-weight:'+(v?'800':'400')+';color:'+(v?catColors[ci%catColors.length]:'var(--text3)')+';">'+(v||'—')+'</td>';
           }).join('');
-          return '<tr><td class="pr">'+d+'</td>'+cells+'<td style="font-weight:800;">'+total+'</td></tr>';
+          return '<tr><td class="pr">'+sanitize(d.name)+'</td>'+cells+'<td style="font-weight:800;">'+total+'</td></tr>';
         }).join('')+
         '</tbody></table></div>';
       })()}
@@ -3540,8 +3639,15 @@ function renderDashboard(){
   ${(function(){
     // ═══ NC STATUS MATRIX BY DEPARTMENT (auto-updating) ═══
     const today=new Date();today.setHours(0,0,0,0);
-    const ncRows=APP.depts.map(d=>{
-      const df=F.filter(f=>f.dept===d.code && f.status!=='closed');
+    const matrixDepts=visibleDepts.slice();
+    F.filter(f=>f.status!=='closed').forEach(function(f){
+      if(!matrixDepts.some(function(d){return findingMatchesDept(f,d);})){
+        var rec=deptRecordForFinding(f);
+        matrixDepts.push(rec||{code:deptCodeForFinding(f),name:deptNameForFinding(f)});
+      }
+    });
+    const ncRows=matrixDepts.map(d=>{
+      const df=F.filter(f=>findingMatchesDept(f,d) && f.status!=='closed');
       const cr=df.filter(f=>f.sev==='critical').length;
       const ma=df.filter(f=>f.sev==='major').length;
       const mi=df.filter(f=>f.sev==='minor').length;
@@ -5522,6 +5628,11 @@ function delayDays(f){
   if(!d)return 0;
   return Math.max(0,Math.floor((todayLocalDate()-d)/86400000));
 }
+function daysUntilDue(f){
+  const d=localDateOnly(f&&f.due);
+  if(!d)return null;
+  return Math.ceil((d-todayLocalDate())/86400000);
+}
 function recipientsForDept(deptCode,mode,delay){
   const r=deptEmailRecord(deptCode);
   let to=spocEmails(deptCode),cc=[];
@@ -5555,7 +5666,7 @@ function recipientsForDept(deptCode,mode,delay){
   return {to:[...new Set(to.filter(Boolean))],cc:[...new Set(cc.filter(Boolean))],spocName:r.spocName||'Team'};
 }
 function sendTemplateEmail(type,deptCode,rows,extra){
-  const d=APP.depts.find(x=>x.code===deptCode)||{code:deptCode,name:deptCode};
+  const d=deptRecordForValue(deptCode)||{code:deptCode,name:deptCode};
   const tpl=emailTpl(type);
   const maxDelay=rows.reduce((m,f)=>Math.max(m,delayDays(f)),0);
   // For escalation emails with a known tier from processOverdueFindings, use it; else compute from matrix
@@ -5582,16 +5693,52 @@ function sendTemplateEmail(type,deptCode,rows,extra){
   const html=replaceTemplate(tpl.body,vars);
   return sendLoggedEmail(type,rec.to,rec.cc,subject,html.replace(/<[^>]+>/g,' '),html,extra&&extra.attachment||'');
 }
-function runEmailScheduler(mode){
+function sendUpcomingReminderBatches(items,opts){
+  opts=opts||{};
+  const tier={label:'Upcoming Target Closure Reminder',frequencyDays:1};
+  const groups={};
+  items.forEach(function(f){var code=deptCodeForFinding(f);if(code)(groups[code]=groups[code]||[]).push(f);});
+  Object.keys(groups).forEach(function(dept){
+    const rows=groups[dept];
+    claimEmailLocks(rows,tier,'upcoming_reminder').then(function(claimedRows){
+      if(!claimedRows.length)return null;
+      return sendTemplateEmail('upcoming_reminder',dept,claimedRows,{escalation_level:'',_tier:tier})
+        .then(function(ok){
+          return commitEmailLocks(claimedRows,tier,'upcoming_reminder',ok).then(function(){return{ok:ok,rows:claimedRows};});
+        });
+    }).then(function(result){
+      if(!result)return;
+      var refs=new Set(result.rows.map(function(f){return String(f.ref||f.id||'');}));
+      var rows=APP.findings||[],dirty=false,doneAt=new Date().toISOString();
+      rows=rows.map(function(f){
+        if(!f||!refs.has(String(f.ref||f.id||'')))return f;
+        dirty=true;
+        return Object.assign({},f,{
+          autoUpcomingEmailStatus:result.ok?'sent':'failed',
+          autoUpcomingEmailResultAt:doneAt,
+          autoUpcomingEmailLastSentAt:result.ok?doneAt:f.autoUpcomingEmailLastSentAt
+        });
+      });
+      if(dirty)APP.findings=rows;
+    });
+  });
+  return {emailQueued:items.length,deptCount:Object.keys(groups).length};
+}
+function runEmailScheduler(mode,opts){
+  opts=opts||{};
   if(mode==='delayed'||mode==='escalation'){
-    const result=processOverdueFindings({sendEmail:true,source:'manual-'+mode,mode:mode});
-    renderMdBody();
-    showToast('Guarded '+mode+' run queued '+(result.emailQueued||0)+' eligible NC(s)');
-    return;
+    const result=processOverdueFindings({sendEmail:true,source:opts.source||('manual-'+mode),mode:mode,silent:!!opts.silent});
+    if(!opts.silent){renderMdBody();showToast('Guarded '+mode+' run queued '+(result.emailQueued||0)+' eligible NC(s)');}
+    return result;
   }
-  const today=new Date();const ncSev={critical:1,major:1,minor:1};let items=APP.findings.filter(f=>f.status!=='closed'&&ncSev[String(f.sev||'').toLowerCase()]);
-  if(mode==='upcoming')items=items.filter(f=>{const d=new Date(f.due);const days=Math.ceil((d-today)/86400000);return days>=0&&days<=5;});
+  const ncSev={critical:1,major:1,minor:1};let items=APP.findings.filter(f=>f.status!=='closed'&&ncSev[String(f.sev||'').toLowerCase()]);
+  if(mode==='upcoming')items=items.filter(f=>{const days=daysUntilDue(f);return days!==null&&days>=0&&days<=5;});
   if(mode==='delayed'||mode==='escalation')items=items.filter(f=>delayDays(f)>0);
+  if(mode==='upcoming'){
+    const result=sendUpcomingReminderBatches(items,opts);
+    if(!opts.silent){renderMdBody();showToast('Guarded upcoming run queued '+(result.emailQueued||0)+' eligible NC(s)');}
+    return result;
+  }
   const groups={};items.forEach(f=>{(groups[f.dept]=groups[f.dept]||[]).push(f);});
   const type=mode==='upcoming'?'upcoming_reminder':mode==='delayed'?'delayed':'escalation';
   const jobs=Object.keys(groups).map(dept=>sendTemplateEmail(type,dept,groups[dept],{escalation_level:mode==='escalation'?'auto':''}));
