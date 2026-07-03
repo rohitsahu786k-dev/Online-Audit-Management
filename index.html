@@ -652,9 +652,9 @@ var AUTH_EXPIRES_KEY='ap_auth_expires_at';
 var LOCAL_SYNC_EXCLUDE_KEYS={ap_rem_p:1,ap_auth_token:1,ap_auth_expires_at:1,ap_local_storage_backup:1,ap_pending_sync_queue:1};
 var _myWrites={};
 var _syncStatus='connecting';
-var SYNC_POLL_INTERVAL_MS=5*60*1000;
+var SYNC_POLL_INTERVAL_MS=15*60*1000;
 var SYNC_WRITE_DEBOUNCE_MS=1200;
-var LOCAL_BACKUP_SYNC_MIN_MS=10*60*1000;
+var LOCAL_BACKUP_SYNC_MIN_MS=60*60*1000;
 var _syncWriteTimers={};
 var _syncLastWriteText={};
 var _syncRemoteMeta={};
@@ -754,6 +754,7 @@ function _safeLocalStorageSnapshot(){
     Object.keys(localStorage).forEach(function(k){
       if(LOCAL_SYNC_EXCLUDE_KEYS[k])return;
       if(!(k.indexOf('ap_')===0||k.indexOf('imp_')===0))return;
+      if(k==='ap_media_library'||k==='ap_audit_drafts')return;
       data[k]=LS.get(k,localStorage.getItem(k));
     });
   }catch(e){}
@@ -767,7 +768,7 @@ function _safeLocalStorageSnapshot(){
 function _collectLocalSyncItems(keys){
   var items={};
   (keys||SYNC_KEYS).forEach(function(k){
-    if(k===LOCAL_STORAGE_BACKUP_KEY){items[k]=_safeLocalStorageSnapshot();return;}
+    if(k===LOCAL_STORAGE_BACKUP_KEY)return;
     if(!_localSyncExists(k))return;
     var value=_sanitizeSyncData(k,LS.get(k,null));
     items[k]=_stripPhotos(k,value);
@@ -885,6 +886,7 @@ function _syncLocalStorageBackupIfNeeded(reason,force){
 }
 function _scheduleLocalBackupSync(reason){
   if(!_apiReady)return;
+  if(reason!=='manual-local-backup')return;
   clearTimeout(_localBackupSyncTimer);
   _localBackupSyncTimer=setTimeout(function(){_syncLocalStorageBackupIfNeeded(reason,false).catch(function(e){console.warn('Local backup sync:',e.message);});},30000);
 }
@@ -1446,7 +1448,6 @@ function normalizeEscalationMatrixData(list){
   }).filter(Boolean);
   rows=rows.filter(function(x,idx){
     if(!x)return false;
-    if(Number(x.min)<3&&Number(x.max)<=6){changed=true;return false;}
     return rows.findIndex(function(y){return y&&y.label===x.label;})===idx;
   });
   return {value:rows,changed:changed};
@@ -1637,10 +1638,7 @@ function initApiSync(){
     var localPushItems={};
 
     SYNC_KEYS.forEach(function(k){
-      if(k===LOCAL_STORAGE_BACKUP_KEY){
-        localPushItems[k]=_safeLocalStorageSnapshot();
-        return;
-      }
+      if(k===LOCAL_STORAGE_BACKUP_KEY)return;
       var hasLocal=_localSyncExists(k);
       var local=hasLocal?LS.get(k,null):null;
       if(cloud[k]&&Object.prototype.hasOwnProperty.call(cloud[k],'value')){
@@ -3169,7 +3167,8 @@ function isFindingPastDue(f){
 }
 function escalationTierForDelay(days){
   var matrix=APP.escalationMatrix||[];
-  return matrix.find(function(x){return days>=x.min&&days<=x.max;})||null;
+  return matrix.find(function(x){return days>=x.min&&days<=x.max;})
+    ||(days>0&&days<7?{label:'Delayed NC Notification',min:1,max:6,frequencyDays:3,to:['spoc'],cc:[]}:null);
 }
 function emailLockKeyForFinding(f,tier,type){
   return [type||'delayed',deptCodeForFinding(f),tier&&tier.label||'',f&&String(f.ref||f.id||'')].join('|');
@@ -3655,7 +3654,7 @@ function renderDashboard(){
       const od=df.filter(f=>{if(!f.due)return false;const dueD=new Date(f.due);return !isNaN(dueD)&&dueD<today;}).length;
       const tot=df.length;
       return{code:d.code,name:d.name,cr:cr,ma:ma,mi:mi,ob:ob,od:od,tot:tot};
-    }).filter(r=>r.tot>0).sort((a,b)=>b.tot-a.tot);
+    }).sort((a,b)=>b.tot-a.tot||a.name.localeCompare(b.name));
     if(!ncRows.length)return '<div class="card sg"><div class="ch"><span class="dot" style="background:var(--teal)"></span>NC Status Matrix — Non-Closed Findings by Department</div><div class="txs td">No open non-conformities — all clear.</div></div>';
     const totCr=ncRows.reduce((s,r)=>s+r.cr,0),totMa=ncRows.reduce((s,r)=>s+r.ma,0),totMi=ncRows.reduce((s,r)=>s+r.mi,0),totOb=ncRows.reduce((s,r)=>s+r.ob,0),totOd=ncRows.reduce((s,r)=>s+r.od,0),totTot=ncRows.reduce((s,r)=>s+r.tot,0);
     // ─ Bar chart geometry ─

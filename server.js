@@ -132,6 +132,8 @@ function hasCurrentSyncClient(req) {
 }
 
 function throttleSyncRead(req, res) {
+  const isManifest = req.query && (req.query.manifest === '1' || req.query.meta === '1');
+  if (!isManifest) return false;
   const key = String((req.authUser && (req.authUser.id || req.authUser.loginId)) || req.ip || 'anonymous');
   const now = Date.now();
   const last = recentSyncReads.get(key) || 0;
@@ -1899,11 +1901,15 @@ app.post('/api/auth/reset-password', wrapAsync(async (req, res) => {
 }));
 
 app.use(express.static(path.join(__dirname, 'public'), {
-  etag: false,
-  maxAge: 0,
+  etag: true,
+  maxAge: '30d',
   setHeaders(res, filePath) {
     if (filePath.endsWith('.html')) {
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      return;
+    }
+    if (/\.(?:png|jpg|jpeg|gif|webp|ico|pdf|woff2?|ttf|css|js)$/i.test(filePath)) {
+      res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
     }
   }
 }));
