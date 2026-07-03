@@ -1164,7 +1164,11 @@ async function findActiveUserFromToken(req) {
   const payload = parseAuthToken(token);
   if (!payload) return null;
   const { users } = await getUsersRecord();
-  return users.find(user => user && user.active !== false && String(user.id || '') === String(payload.sub || '')) || null;
+  return users.find(user => {
+    if (!user || user.active === false) return false;
+    if (String(user.id || '') === String(payload.sub || '')) return true;
+    return cleanIdentity(user.loginId) === cleanIdentity(payload.loginId);
+  }) || null;
 }
 
 async function requireApiAuth(req, res, next) {
