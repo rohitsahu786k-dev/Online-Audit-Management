@@ -1848,7 +1848,10 @@ function startEmailScheduler(){
   function runGuardedAutoEmails(){
     if(!_apiReady||!APP.currentUser)return;
     if(typeof runEmailScheduler==='function')runEmailScheduler('upcoming',{silent:true,source:'auto-upcoming'});
-    if(typeof processOverdueFindings==='function')processOverdueFindings({sendEmail:true,source:'auto-delayed',mode:'delayed',silent:true});
+    if(typeof processOverdueFindings==='function'){
+      processOverdueFindings({sendEmail:true,source:'auto-delayed',mode:'delayed',silent:true});
+      processOverdueFindings({sendEmail:true,source:'auto-escalation',mode:'escalation',silent:true});
+    }
   }
   setTimeout(runGuardedAutoEmails,60000);
   _emailSchedulerTimer=setInterval(runGuardedAutoEmails,4*60*60*1000);
@@ -3189,13 +3192,46 @@ function isFindingPastDue(f){
   var due=localDateOnly(f&&f.due);
   return !!(due&&due<todayLocalDate());
 }
+function isFindingDueOrPast(f){
+  var due=localDateOnly(f&&f.due);
+  return !!(due&&due<=todayLocalDate());
+}
+function defaultEmailEscalationTiers(){
+  return [
+    {label:'Delayed NC Notification',min:0,max:6,frequencyDays:1,to:['spoc'],cc:['manager','hod','auditor','master_admin'],sendDays:[0,3,6]},
+    {label:'Escalation Tier 2',min:7,max:14,frequencyDays:2,to:['hod'],cc:['spoc','auditor','master_admin']},
+    {label:'Escalation Tier 3',min:15,max:9999,frequencyDays:30,to:['management'],cc:['hod','spoc','auditor','master_admin']}
+  ];
+}
+function defaultEscalationTierForDelay(days){
+  return defaultEmailEscalationTiers().find(function(x){return days>=x.min&&days<=x.max;})||null;
+}
+function isDelayedNotificationSendDay(days){
+  return [0,3,6].indexOf(Number(days))>-1;
+}
+function isFindingEmailActionable(f){
+  if(!f)return false;
+  var ws=typeof findingWorkflowStatus==='function'?findingWorkflowStatus(f):String(f.status||'').toLowerCase();
+  var status=String(f.status||'').toLowerCase();
+  var capaStatus=String(f.capaStatus||'').toLowerCase();
+  return status!=='closed'&&status!=='pending-closure'&&capaStatus!=='closed'&&capaStatus!=='submitted'&&ws!=='closed'&&ws!=='pending-closure';
+}
 function escalationTierForDelay(days){
   var matrix=APP.escalationMatrix||[];
-  return matrix.find(function(x){return days>=x.min&&days<=x.max;})
-    ||(days>0&&days<7?{label:'Delayed NC Notification',min:1,max:6,frequencyDays:3,to:['spoc'],cc:[]}:null);
+  var defaultTier=defaultEscalationTierForDelay(days);
+  var configured=matrix.find(function(x){return days>=x.min&&days<=x.max;});
+  if(!defaultTier)return configured||null;
+  if(defaultTier.min<7)return Object.assign({},configured||{},defaultTier);
+  return Object.assign({},defaultTier,configured||{},{
+    frequencyDays:defaultTier.frequencyDays,
+    to:(configured&&configured.to&&configured.to.length)?configured.to:defaultTier.to,
+    cc:[...new Set([].concat((configured&&configured.cc)||[],defaultTier.cc))]
+  });
 }
 function emailLockKeyForFinding(f,tier,type){
-  return [type||'delayed',deptCodeForFinding(f),tier&&tier.label||'',f&&String(f.ref||f.id||'')].join('|');
+  var parts=[type||'delayed',deptCodeForFinding(f),tier&&tier.label||'',f&&String(f.ref||f.id||'')];
+  if(type==='upcoming_reminder')parts.push(String((f&&f.due)||''));
+  return parts.join('|');
 }
 function emailLockItemsForRows(rows,tier,type){
   return (rows||[]).map(function(f){
@@ -3235,38 +3271,46 @@ function processOverdueFindings(opts){
     if(!f||typeof f!=='object')return f;
     var status=String(f.status||'open').toLowerCase();
     var capaStatus=String(f.capaStatus||'').toLowerCase();
-    if(status==='closed'||!isFindingPastDue(f))return f;
+    if(status==='closed'||!isFindingDueOrPast(f))return f;
     if(status==='pending-closure'||capaStatus==='submitted'||findingWorkflowStatus(f)==='pending-closure'||_hasUnreviewedClosureSubmission(f))return f;
     var item=Object.assign({},f);
     item.activityLog=compactAutoDelayActivityLog(item.activityLog);
     var hasAutoDelayLog=item.activityLog.some(_isAutoDelayActivity);
-    if(status!=='delayed'){
-      item.previousStatusBeforeDelay=f.status||'open';
-      item.status='delayed';
-      item.capaStatus='delayed';
-      item.delayedAt=item.delayedAt||nowIso;
-      if(!hasAutoDelayLog){
-        item.activityLog.push({user:'System',action:'Auto status changed to Delayed (due date missed)',ts:stamp});
+    // Status only flips to Delayed once the due date is actually missed (due < today).
+    // On the due date itself (delay day 0) the finding keeps its status but is still
+    // eligible for the day-0 Delayed NC Notification below.
+    if(isFindingPastDue(f)){
+      if(status!=='delayed'){
+        item.previousStatusBeforeDelay=f.status||'open';
+        item.status='delayed';
+        item.capaStatus='delayed';
+        item.delayedAt=item.delayedAt||nowIso;
+        if(!hasAutoDelayLog){
+          item.activityLog.push({user:'System',action:'Auto status changed to Delayed (due date missed)',ts:stamp});
+        }
+        updated++;
+        changed=true;
+      }else if(item.capaStatus!=='delayed'){
+        item.capaStatus='delayed';
+        changed=true;
+      }else if(item.activityLog!==f.activityLog){
+        changed=true;
       }
-      updated++;
-      changed=true;
-    }else if(item.capaStatus!=='delayed'){
-      item.capaStatus='delayed';
-      changed=true;
     }else if(item.activityLog!==f.activityLog){
       changed=true;
     }
     // ── Per-tier frequency enforcement ──
     // Each tier tracks its own last-sent timestamp independently:
-    //   Tier 1 (3-6d)  → every 3 days
-    //   Tier 2 (7-14d) → every 2 days  (escalation to HOD)
-    //   Tier 3 (15+d)  → every 30 days (escalation to MD)
+    //   Delayed NC (0-6d) → send on delay days 0, 3, 6 only (day 0 = target due date)
+    //   Tier 2 (7-14d)    → every 2 days  (escalation to HOD)
+    //   Tier 3 (15+d)     → every 30 days (escalation to MD)
     if(allowEmailSend&&typeof sendTemplateEmail==='function'){
       var fDays=delayDays(item);
       var fTier=escalationTierForDelay(fDays);
       if(!fTier)return item;
       if(opts.mode==='delayed'&&fTier.min>=7)return item;
       if(opts.mode==='escalation'&&fTier.min<7)return item;
+      if(fTier.min<7&&!isDelayedNotificationSendDay(fDays))return item;
       var fFreqMs=(fTier.frequencyDays||3)*24*60*60*1000;
       var fTierLabel=fTier.label;
       // autoEmailTierLastSentAt is a map: { tierLabel: isoTimestamp }
@@ -5551,7 +5595,7 @@ function emailTpl(type){return (APP.emailTemplates||[]).find(t=>t.type===type&&t
 function renderEmailMaster(canEdit){
   const q=(APP.emailSearch||'').toLowerCase();
   const rows=(APP.emailMaster||[]).filter(r=>!q||[r.spocName,r.email,r.department,r.deptCode,r.reportingName,r.reportingEmail,r.hodEmail,r.managementEmail].join(' ').toLowerCase().includes(q));
-  return `<div class="grid g21 sg"><div class="card"><div class="fb mb2"><div class="ch" style="margin:0"><span class="dot" style="background:var(--brand)"></span>Email Master (${rows.length})</div><div class="flex g2u">${canEdit?`<button class="btn btn-ghost btn-sm" onclick="downloadEmailSample()">Download Template</button><button class="btn btn-primary btn-sm" onclick="el('em-import')?.click()">Import</button>`:''}<input type="file" id="em-import" accept=".csv,.xlsx" style="display:none" onchange="importEmailMaster(event)"></div></div><div class="mb2"><input placeholder="Search SPOC, department or email..." value="${sanitize(APP.emailSearch||'')}" oninput="APP.emailSearch=this.value;renderMdBody()"></div><div class="tw"><table><thead><tr><th>SPOC</th><th>Email</th><th>Department</th><th>Manager</th><th>HOD/BUH</th><th>Management</th><th>Status</th>${canEdit?'<th>Actions</th>':''}</tr></thead><tbody>${rows.map(r=>`<tr><td class="pr">${sanitize(r.spocName)}</td><td>${sanitize(r.email)}</td><td>${sanitize(r.department||r.deptCode)}</td><td>${sanitize(r.reportingName)}<div class="txx td">${sanitize(r.reportingEmail)}</div></td><td>${sanitize(r.hodEmail||'-')}</td><td>${sanitize(r.managementEmail||'-')}</td><td>${badge(r.status==='active'?'b-green':'b-gray',r.status==='active'?'Active':'Inactive')}</td>${canEdit?`<td class="flex g1u"><button class="btn ${APP.editEmailRecord&&APP.editEmailRecord.id===r.id?'btn-primary':'btn-ghost'} btn-sm" onclick="editEmailMaster('${sanitize(r.id)}')">Edit</button><button class="btn btn-danger btn-sm" onclick="deleteEmailMaster('${sanitize(r.id)}')">Delete</button></td>`:''}</tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:12px;">No email records</td></tr>'}</tbody></table></div></div><div class="card" id="email-master-form-card"><div class="ch"><span class="dot" style="background:var(--teal)"></span>${canEdit?(APP.editEmailRecord?'Edit Email Record':'Add Email Record'):'Scheduler'}</div>${canEdit?emailMasterForm():''}<div class="mt3" style="border-top:1px solid var(--border);padding-top:12px;"><div class="ch"><span class="dot" style="background:var(--amber)"></span>Automation Runs</div><div class="flex g2u fw"><button class="btn btn-ghost btn-sm" onclick="runEmailScheduler('upcoming')">Upcoming 5 Days</button><button class="btn btn-ghost btn-sm" onclick="runEmailScheduler('delayed')">Delayed NCs</button><button class="btn btn-brand btn-sm" onclick="runEmailScheduler('escalation')">Weekly Escalation</button></div><div class="txs td mt2">Summary emails are grouped by department and observations are excluded.</div></div></div></div>`;
+  return `<div class="grid g21 sg"><div class="card"><div class="fb mb2"><div class="ch" style="margin:0"><span class="dot" style="background:var(--brand)"></span>Email Master (${rows.length})</div><div class="flex g2u">${canEdit?`<button class="btn btn-ghost btn-sm" onclick="downloadEmailSample()">Download Template</button><button class="btn btn-primary btn-sm" onclick="el('em-import')?.click()">Import</button>`:''}<input type="file" id="em-import" accept=".csv,.xlsx" style="display:none" onchange="importEmailMaster(event)"></div></div><div class="mb2"><input placeholder="Search SPOC, department or email..." value="${sanitize(APP.emailSearch||'')}" oninput="APP.emailSearch=this.value;renderMdBody()"></div><div class="tw"><table><thead><tr><th>SPOC</th><th>Email</th><th>Department</th><th>Manager</th><th>HOD/BUH</th><th>Management</th><th>Status</th>${canEdit?'<th>Actions</th>':''}</tr></thead><tbody>${rows.map(r=>`<tr><td class="pr">${sanitize(r.spocName)}</td><td>${sanitize(r.email)}</td><td>${sanitize(r.department||r.deptCode)}</td><td>${sanitize(r.reportingName)}<div class="txx td">${sanitize(r.reportingEmail)}</div></td><td>${sanitize(r.hodEmail||'-')}</td><td>${sanitize(r.managementEmail||'-')}</td><td>${badge(r.status==='active'?'b-green':'b-gray',r.status==='active'?'Active':'Inactive')}</td>${canEdit?`<td class="flex g1u"><button class="btn ${APP.editEmailRecord&&APP.editEmailRecord.id===r.id?'btn-primary':'btn-ghost'} btn-sm" onclick="editEmailMaster('${sanitize(r.id)}')">Edit</button><button class="btn btn-danger btn-sm" onclick="deleteEmailMaster('${sanitize(r.id)}')">Delete</button></td>`:''}</tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:12px;">No email records</td></tr>'}</tbody></table></div></div><div class="card" id="email-master-form-card"><div class="ch"><span class="dot" style="background:var(--teal)"></span>${canEdit?(APP.editEmailRecord?'Edit Email Record':'Add Email Record'):'Scheduler'}</div>${canEdit?emailMasterForm():''}<div class="mt3" style="border-top:1px solid var(--border);padding-top:12px;"><div class="ch"><span class="dot" style="background:var(--amber)"></span>Automation Runs</div><div class="flex g2u fw"><button class="btn btn-ghost btn-sm" onclick="runEmailScheduler('upcoming')">Upcoming 0-2 Days</button><button class="btn btn-ghost btn-sm" onclick="runEmailScheduler('delayed')">Delayed NCs</button><button class="btn btn-brand btn-sm" onclick="runEmailScheduler('escalation')">Escalation Tiers</button></div><div class="txs td mt2">Summary emails are grouped by department and observations are excluded.</div></div></div></div>`;
 }
 function emailMasterForm(r){
   r=r||APP.editEmailRecord||{};
@@ -5661,37 +5705,51 @@ function daysUntilDue(f){
   if(!d)return null;
   return Math.ceil((d-todayLocalDate())/86400000);
 }
-function recipientsForDept(deptCode,mode,delay){
+function emailsForRecipientKey(key,deptCode){
+  key=String(key||'').toLowerCase().replace(/[\s-]+/g,'_');
+  if(key==='spoc')return spocEmails(deptCode);
+  if(key==='manager'||key==='reporting')return deptManagerEmails(deptCode);
+  if(key==='hod'||key==='buh')return deptHodEmails(deptCode);
+  if(key==='management'||key==='md')return deptManagementEmails(deptCode);
+  if(key==='auditor')return deptAuditorEmails(deptCode);
+  if(key==='master_admin'||key==='admin')return masterAdminEmails();
+  return splitEmailList(key);
+}
+function uniqueEmailList(list){
+  var seen={};
+  return (list||[]).flatMap(splitEmailList).filter(function(email){
+    var key=String(email||'').toLowerCase();
+    if(!key||seen[key])return false;
+    seen[key]=true;
+    return true;
+  });
+}
+function recipientsForDept(deptCode,mode,delay,tier){
   const r=deptEmailRecord(deptCode);
   let to=spocEmails(deptCode),cc=[];
-  if(mode==='audit'||mode==='upcoming'){cc=deptManagerEmails(deptCode).concat(deptHodEmails(deptCode),managementEmails().slice(0,1));}
+  if(mode==='audit'){cc=deptManagerEmails(deptCode).concat(deptHodEmails(deptCode),managementEmails().slice(0,1));}
+  if(mode==='upcoming'){cc=deptManagerEmails(deptCode).concat(deptHodEmails(deptCode),deptAuditorEmails(deptCode),masterAdminEmails());}
   if(mode==='delayed'){
-    // Tier 1 (3-6 days): email to SPOC only (no CC escalation)
     to=spocEmails(deptCode);
-    cc=[];
+    cc=deptManagerEmails(deptCode).concat(deptHodEmails(deptCode),deptAuditorEmails(deptCode),masterAdminEmails());
   }
   if(mode==='escalation'){
-    // Determine tier from escalation matrix
     const matrix=APP.escalationMatrix||[];
-    const m=matrix.find(x=>delay>=x.min&&delay<=x.max)||matrix[0]||{to:['spoc'],cc:[],frequencyDays:3,label:'Default'};
+    const m=tier||matrix.find(x=>delay>=x.min&&delay<=x.max)||defaultEscalationTierForDelay(delay)||matrix[0]||{to:['spoc'],cc:['auditor','master_admin'],frequencyDays:3,label:'Default'};
     to=[];
     cc=[];
-    (m.to||[]).forEach(k=>{
-      if(k==='spoc')to=to.concat(spocEmails(deptCode));
-      if(k==='manager')to=to.concat(deptManagerEmails(deptCode));
-      if(k==='hod')to=to.concat(deptHodEmails(deptCode));
-      if(k==='management')to=to.concat(deptManagementEmails(deptCode));
-    });
-    (m.cc||[]).forEach(k=>{
-      if(k==='spoc')cc=cc.concat(spocEmails(deptCode));
-      if(k==='manager')cc=cc.concat(deptManagerEmails(deptCode));
-      if(k==='hod')cc=cc.concat(deptHodEmails(deptCode));
-      if(k==='management')cc=cc.concat(deptManagementEmails(deptCode));
-    });
-    // Fallback: if no TO resolved, default to SPOC
+    (m.to||[]).forEach(k=>{to=to.concat(emailsForRecipientKey(k,deptCode));});
+    (m.cc||[]).forEach(k=>{cc=cc.concat(emailsForRecipientKey(k,deptCode));});
+    if(delay>=7&&delay<=14){
+      if(!to.length)to=deptHodEmails(deptCode);
+      cc=cc.concat(spocEmails(deptCode),deptAuditorEmails(deptCode),masterAdminEmails());
+    }else if(delay>=15){
+      if(!to.length)to=deptManagementEmails(deptCode);
+      cc=cc.concat(deptHodEmails(deptCode),spocEmails(deptCode),deptAuditorEmails(deptCode),masterAdminEmails());
+    }
     if(!to.length)to=spocEmails(deptCode);
   }
-  return {to:[...new Set(to.filter(Boolean))],cc:[...new Set(cc.filter(Boolean))],spocName:r.spocName||'Team'};
+  return {to:uniqueEmailList(to),cc:uniqueEmailList(cc),spocName:r.spocName||'Team'};
 }
 function sendTemplateEmail(type,deptCode,rows,extra){
   const d=deptRecordForValue(deptCode)||{code:deptCode,name:deptCode};
@@ -5700,7 +5758,7 @@ function sendTemplateEmail(type,deptCode,rows,extra){
   // For escalation emails with a known tier from processOverdueFindings, use it; else compute from matrix
   let effectiveMode=type;
   if(type==='delayed'&&extra&&extra._tier&&extra._tier.min>=7)effectiveMode='escalation';
-  const rec=recipientsForDept(deptCode,effectiveMode,maxDelay);
+  const rec=recipientsForDept(deptCode,effectiveMode,maxDelay,extra&&extra._tier);
   const first=rows&&rows[0]||{};
   const vars=Object.assign({
     department_name:d.name,
@@ -5712,7 +5770,7 @@ function sendTemplateEmail(type,deptCode,rows,extra){
     clause_name:clauseName(first.clause),
     clause_description:clauseDescription(first.clause),
     nc_table:ncTable(rows),
-    window_days:5,
+    window_days:2,
     escalation_level:extra&&extra.escalation_level||'',
     audit_name:extra&&extra.audit_name||'',
     submitted_at:new Date().toLocaleString()
@@ -5723,7 +5781,7 @@ function sendTemplateEmail(type,deptCode,rows,extra){
 }
 function sendUpcomingReminderBatches(items,opts){
   opts=opts||{};
-  const tier={label:'Upcoming Target Closure Reminder',frequencyDays:1};
+  const tier={label:'Upcoming Due Date Reminder',frequencyDays:365};
   const groups={};
   items.forEach(function(f){var code=deptCodeForFinding(f);if(code)(groups[code]=groups[code]||[]).push(f);});
   Object.keys(groups).forEach(function(dept){
@@ -5759,8 +5817,8 @@ function runEmailScheduler(mode,opts){
     if(!opts.silent){renderMdBody();showToast('Guarded '+mode+' run queued '+(result.emailQueued||0)+' eligible NC(s)');}
     return result;
   }
-  const ncSev={critical:1,major:1,minor:1};let items=APP.findings.filter(f=>f.status!=='closed'&&ncSev[String(f.sev||'').toLowerCase()]);
-  if(mode==='upcoming')items=items.filter(f=>{const days=daysUntilDue(f);return days!==null&&days>=0&&days<=5;});
+  const ncSev={critical:1,major:1,minor:1};let items=APP.findings.filter(f=>isFindingEmailActionable(f)&&ncSev[String(f.sev||'').toLowerCase()]);
+  if(mode==='upcoming')items=items.filter(f=>{const days=daysUntilDue(f);return days!==null&&days>=0&&days<=2;});
   if(mode==='delayed'||mode==='escalation')items=items.filter(f=>delayDays(f)>0);
   if(mode==='upcoming'){
     const result=sendUpcomingReminderBatches(items,opts);
@@ -5772,7 +5830,7 @@ function runEmailScheduler(mode,opts){
   const jobs=Object.keys(groups).map(dept=>sendTemplateEmail(type,dept,groups[dept],{escalation_level:mode==='escalation'?'auto':''}));
   Promise.all(jobs).then(()=>{renderMdBody();showToast('Scheduler processed '+jobs.length+' department summary email(s)');});
 }
-function sendTestTemplate(){const to=prompt('Send test email to:');if(!to)return;const t=(APP.emailTemplates||[]).find(x=>x.id===APP.emailTemplateId);if(!t)return;const sampleRows=[{ref:'NC-001',auditRef:'AUD-001',clause:'AS9100D §8.5.2',due:new Date().toISOString().slice(0,10),status:'open',sev:'major'}];const vars={department_name:'Sample Department',spoc_name:'Sample SPOC',audit_name:'Sample Audit',nc_count:2,nc_number:'NC-001',target_date:new Date().toISOString().slice(0,10),delay_days:3,clause_name:'AS9100D §8.5.2',clause_description:clauseDescription('AS9100D §8.5.2'),nc_table:ncTable(sampleRows),window_days:5,escalation_level:'1'};sendLoggedEmail('test',[to],[],replaceTemplate(t.subject,vars),replaceTemplate(t.body,vars).replace(/<[^>]+>/g,' '),replaceTemplate(t.body,vars),'');}
+function sendTestTemplate(){const to=prompt('Send test email to:');if(!to)return;const t=(APP.emailTemplates||[]).find(x=>x.id===APP.emailTemplateId);if(!t)return;const sampleRows=[{ref:'NC-001',auditRef:'AUD-001',clause:'AS9100D §8.5.2',due:new Date().toISOString().slice(0,10),status:'open',sev:'major'}];const vars={department_name:'Sample Department',spoc_name:'Sample SPOC',audit_name:'Sample Audit',nc_count:2,nc_number:'NC-001',target_date:new Date().toISOString().slice(0,10),delay_days:3,clause_name:'AS9100D §8.5.2',clause_description:clauseDescription('AS9100D §8.5.2'),nc_table:ncTable(sampleRows),window_days:2,escalation_level:'1'};sendLoggedEmail('test',[to],[],replaceTemplate(t.subject,vars),replaceTemplate(t.body,vars).replace(/<[^>]+>/g,' '),replaceTemplate(t.body,vars),'');}
 function sendAuditSubmissionEmail(audit,rows){return sendTemplateEmail('audit_submission',audit.dept,rows,{audit_name:audit.ref||audit.name||audit.deptName,attachment:'Audit Report PDF',submitted_at:new Date().toLocaleString()});}
 
 // Dept CRUD
@@ -5990,7 +6048,7 @@ function managerSendDeptReminder(code){
   const rec=recipientsForDept(code,type,rows.reduce((m,f)=>Math.max(m,delayDays(f)),0));
   const first=rows&&rows[0]||{};
   const subject='Overdue NCs - '+d.name;
-  const vars={department_name:d.name,spoc_name:rec.spocName,nc_count:rows.length,nc_number:first.ref||'',target_date:first.due||'',delay_days:delayDays(first),clause_name:clauseName(first.clause),clause_description:clauseDescription(first.clause),nc_table:ncTable(rows),window_days:5,escalation_level:'Manager'};
+  const vars={department_name:d.name,spoc_name:rec.spocName,nc_count:rows.length,nc_number:first.ref||'',target_date:first.due||'',delay_days:delayDays(first),clause_name:clauseName(first.clause),clause_description:clauseDescription(first.clause),nc_table:ncTable(rows),window_days:2,escalation_level:'Manager'};
   const html=replaceTemplate(tpl.body,vars);
   const ccMerged=[...new Set(fixedCc)];
   sendLoggedEmail(type,spocTo.length?spocTo:rec.to,ccMerged,subject,html.replace(/<[^>]+>/g,' '),html,'').then(()=>showToast('Department reminder sent/logged'));
