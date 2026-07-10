@@ -487,18 +487,21 @@ function isReviewedOrClosedFinding(finding) {
 function parseAuditTimestamp(value) {
   const raw = String(value || '').trim();
   if (!raw) return 0;
+  // The client stores locale dates in en-IN D/M/Y form. Date.parse() interprets
+  // ambiguous slash dates as M/D/Y, so parse the app-owned format first.
+  const match = raw.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:,\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AP]M|am|pm)?)?$/);
+  if (match) {
+    let hour = Number(match[4] || 0);
+    const minute = Number(match[5] || 0);
+    const second = Number(match[6] || 0);
+    const meridiem = String(match[7] || '').toLowerCase();
+    if (meridiem === 'pm' && hour < 12) hour += 12;
+    if (meridiem === 'am' && hour === 12) hour = 0;
+    const time = new Date(Number(match[3]), Number(match[2]) - 1, Number(match[1]), hour, minute, second).getTime();
+    if (Number.isFinite(time)) return time;
+  }
   const direct = Date.parse(raw);
-  if (Number.isFinite(direct)) return direct;
-  const match = raw.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:,\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AP]M|am|pm)?)?/);
-  if (!match) return 0;
-  let hour = Number(match[4] || 0);
-  const minute = Number(match[5] || 0);
-  const second = Number(match[6] || 0);
-  const meridiem = String(match[7] || '').toLowerCase();
-  if (meridiem === 'pm' && hour < 12) hour += 12;
-  if (meridiem === 'am' && hour === 12) hour = 0;
-  const time = new Date(Number(match[3]), Number(match[2]) - 1, Number(match[1]), hour, minute, second).getTime();
-  return Number.isFinite(time) ? time : 0;
+  return Number.isFinite(direct) ? direct : 0;
 }
 
 function isClosureSubmissionAction(action) {
@@ -625,8 +628,8 @@ function normalizeFindingSyncState(finding) {
       item.auditClosureDate = null;
       item.closedAt = null;
     } else {
-      item.status = decision === 'accept' ? 'closed' : 'open';
-      item.capaStatus = decision === 'accept' ? 'closed' : 'open';
+      item.status = decision === 'accept' ? 'closed' : 'in-progress';
+      item.capaStatus = decision === 'accept' ? 'closed' : 'in-progress';
     }
     status = String(item.status || '').toLowerCase();
     capaStatus = String(item.capaStatus || '').toLowerCase();
@@ -1939,3 +1942,8 @@ if (require.main === module) {
 }
 
 module.exports = app;
+module.exports._syncTest = Object.freeze({
+  parseAuditTimestamp,
+  normalizeFindingSyncState,
+  mergeFindingsForSync
+});

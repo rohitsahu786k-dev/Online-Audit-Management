@@ -112,6 +112,12 @@ async function main() {
       };
       check(!_hasUnreviewedClosureSubmission(ambiguousDateCase), 'Reject must stick even with ambiguous D/M/Y closureDate');
       check(findingWorkflowStatus(ambiguousDateCase) === 'in-progress', 'Ambiguous-date case must show In Process, not Submit For Review');
+      const legacyPendingReject = normalizeFindingSyncObject(Object.assign({}, ambiguousDateCase, {
+        status: 'pending-closure',
+        capaStatus: 'submitted'
+      }));
+      check(legacyPendingReject.status === 'in-progress', 'Reviewed legacy pending rejection must repair to In Process');
+      check(legacyPendingReject.capaStatus === 'in-progress', 'Reviewed legacy pending CAPA must repair to In Process');
       // Simulate the record going overdue and re-syncing/reloading repeatedly — it must not resurrect.
       const overdueCopy = clone(ambiguousDateCase);
       overdueCopy.status = 'delayed';

@@ -10,6 +10,8 @@
     "import:backup": "node scripts/import-backup.js",
     "users:upsert": "node scripts/upsert-users.js",
     "test:capa-status": "node scripts/capa-status-regression-test.js",
+    "test:server-sync": "node scripts/server-sync-regression-test.js",
+    "test:email-cc": "node scripts/automatic-email-cc-regression-test.js",
     "test:smoke": "node scripts/smoke-test.js"
   },
   "dependencies": {

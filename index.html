@@ -1228,8 +1228,8 @@ function normalizeFindingSyncObject(f){
     if(unreviewed){
       item.decision=null;item.decisionComments='';item.decisionDate=null;item.auditClosureDate=null;item.closedAt=null;
     }else{
-      item.status=decision==='accept'?'closed':'open';
-      item.capaStatus=decision==='accept'?'closed':'open';
+      item.status=decision==='accept'?'closed':'in-progress';
+      item.capaStatus=decision==='accept'?'closed':'in-progress';
     }
     status=String(item.status||'').toLowerCase();
     capaStatus=String(item.capaStatus||'').toLowerCase();
@@ -2124,7 +2124,7 @@ function normalizeFindingsData(data){
         updates.decision=null;updates.decisionComments='';updates.decisionDate=null;updates.auditClosureDate=null;updates.closedAt=null;changed=true;
         decisionText='';
       }else{
-        updates.status=decisionText==='accept'?'closed':'open';updates.capaStatus=decisionText==='accept'?'closed':'open';changed=true;
+        updates.status=decisionText==='accept'?'closed':'in-progress';updates.capaStatus=decisionText==='accept'?'closed':'in-progress';changed=true;
         statusText=updates.status;capaStatusText=updates.capaStatus;
       }
     }
