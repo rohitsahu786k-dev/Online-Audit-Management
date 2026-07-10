@@ -1848,7 +1848,10 @@ function startEmailScheduler(){
   function runGuardedAutoEmails(){
     if(!_apiReady||!APP.currentUser)return;
     if(typeof runEmailScheduler==='function')runEmailScheduler('upcoming',{silent:true,source:'auto-upcoming'});
-    if(typeof processOverdueFindings==='function')processOverdueFindings({sendEmail:true,source:'auto-delayed',mode:'delayed',silent:true});
+    if(typeof processOverdueFindings==='function'){
+      processOverdueFindings({sendEmail:true,source:'auto-delayed',mode:'delayed',silent:true});
+      processOverdueFindings({sendEmail:true,source:'auto-escalation',mode:'escalation',silent:true});
+    }
   }
   setTimeout(runGuardedAutoEmails,60000);
   _emailSchedulerTimer=setInterval(runGuardedAutoEmails,4*60*60*1000);
@@ -3471,7 +3474,8 @@ function sendCapaReminder(key){
   const to=spocEmails(f.dept);
   const subject='CAPA Reminder - '+f.ref+' - '+(f.deptName||f.dept);
   const text='CAPA reminder for '+f.ref+'\nDepartment: '+(f.deptName||f.dept)+'\nSeverity: '+(SEV_LABEL[f.sev]||f.sev)+'\nDue: '+(f.due||'Not set')+'\nStatus: '+(STAT_LABEL[f.status]||f.status)+'\n\nFinding: '+(f.desc||'')+'\n\nPlease update closure evidence in OnePWS AuditPro.';
-  return sendLoggedEmail('capa_reminder',to,deptManagerEmails(f.dept),subject,text,'','').then(function(ok){
+  const cc=[...new Set(deptManagerEmails(f.dept).concat(deptHodEmails(f.dept)))];
+  return sendLoggedEmail('capa_reminder',to,cc,subject,text,'','').then(function(ok){
     if(ok){
       const rows=APP.findings;const row=findCapa(key,rows);
       if(row){
@@ -5170,12 +5174,13 @@ function reviewDec(dec){
     if(today&&selected>today){showToast('⚠ Audit closure date cannot be future');return;}
   }
   f.decision=dec;f.decisionComments=cmt;f.decisionDate=new Date().toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'});f.decisionAt=new Date().toISOString();
-  f.status=dec==='accept'?'closed':'open';f.capaStatus=dec==='accept'?'closed':'open';
+  f.status=dec==='accept'?'closed':'in-progress';f.capaStatus=dec==='accept'?'closed':'in-progress';
   f.auditClosureDate=dec==='accept'?auditClosureDate:null;
   f.closedAt=dec==='accept'?dateInputToLocalStart(auditClosureDate):null;touchFinding(f);
+  f.statusChangedAt=f.updatedAt;
   f.activityLog=f.activityLog||[];f.activityLog.push({user:APP.currentUser?.name,action:`Closure ${dec==='accept'?'ACCEPTED':'REJECTED'}${dec==='accept'?' effective '+auditClosureDateText(auditClosureDate):''}${cmt?' — '+cmt:''}`,ts:f.decisionDate});
   APP.findings=F;APP.activeCapaId=capaKey(f);closeM('m-review');addNotif('closure',dec==='accept'?'✅ Closed':'❌ Rejected',`${f.ref}: ${dec==='accept'?'Closure accepted':'Reopened - '+cmt}`,'capa',['admin','auditor','spoc']);
-  renderPage('capa');buildNav();showToast(dec==='accept'?'✅ Closed & verified!':'❌ Rejected. Reopened.');
+  renderPage('capa');buildNav();showToast(dec==='accept'?'✅ Closed & verified!':'❌ Rejected. Set to In Process — please resubmit closure evidence.');
 }
 function exportCapaExcel(){
   if(!window.XLSX){showToast('Excel loading...');return;}
@@ -5691,6 +5696,8 @@ function recipientsForDept(deptCode,mode,delay){
     // Fallback: if no TO resolved, default to SPOC
     if(!to.length)to=spocEmails(deptCode);
   }
+  // Department Manager and HOD/BUH (from Email Master) are always CC'd on automatic emails.
+  cc=cc.concat(deptManagerEmails(deptCode),deptHodEmails(deptCode));
   return {to:[...new Set(to.filter(Boolean))],cc:[...new Set(cc.filter(Boolean))],spocName:r.spocName||'Team'};
 }
 function sendTemplateEmail(type,deptCode,rows,extra){
@@ -5992,7 +5999,7 @@ function managerSendDeptReminder(code){
   const subject='Overdue NCs - '+d.name;
   const vars={department_name:d.name,spoc_name:rec.spocName,nc_count:rows.length,nc_number:first.ref||'',target_date:first.due||'',delay_days:delayDays(first),clause_name:clauseName(first.clause),clause_description:clauseDescription(first.clause),nc_table:ncTable(rows),window_days:5,escalation_level:'Manager'};
   const html=replaceTemplate(tpl.body,vars);
-  const ccMerged=[...new Set(fixedCc)];
+  const ccMerged=[...new Set(rec.cc.concat(fixedCc))];
   sendLoggedEmail(type,spocTo.length?spocTo:rec.to,ccMerged,subject,html.replace(/<[^>]+>/g,' '),html,'').then(()=>showToast('Department reminder sent/logged'));
 }
 function managerSendSummary(){

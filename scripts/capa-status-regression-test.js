@@ -50,20 +50,20 @@ async function main() {
       check(_hasUnreviewedClosureSubmission(submitted), 'SPOC submission should be unreviewed before auditor action');
 
       const reopened = clone(submitted);
-      reopened.status = 'open';
-      reopened.capaStatus = 'open';
+      reopened.status = 'in-progress';
+      reopened.capaStatus = 'in-progress';
       reopened.decision = 'reject';
       reopened.decisionComments = 'Needs correction';
       reopened.decisionDate = '01 Jul 2026, 10:30 am';
       reopened.decisionAt = '2026-07-01T05:00:00.000Z';
       reopened.statusChangedAt = '2026-07-01T05:00:00.000Z';
       reopened.updatedAt = '2026-07-01T05:00:00.000Z';
-      reopened.activityLog.push({ user: 'Auditor', action: 'Status -> Open', ts: '01 Jul 2026, 10:30 am' });
+      reopened.activityLog.push({ user: 'Auditor', action: 'Closure REJECTED — Needs correction', ts: '01 Jul 2026, 10:30 am' });
 
-      check(findingWorkflowStatus(reopened) === 'open', 'Auditor-reopened CAPA must stay Open');
-      check(!_hasUnreviewedClosureSubmission(reopened), 'Auditor reopen should supersede old closure submission');
-      check(_chooseFindingForSync(reopened, submitted).status === 'open', 'Sync must keep newer local Open over stale pending remote');
-      check(_chooseFindingForSync(submitted, reopened).status === 'open', 'Sync must keep newer remote Open over stale pending local');
+      check(findingWorkflowStatus(reopened) === 'in-progress', 'Rejected CAPA must move to In Process, not stay Submit For Review');
+      check(!_hasUnreviewedClosureSubmission(reopened), 'Auditor reject should supersede old closure submission');
+      check(_chooseFindingForSync(reopened, submitted).status === 'in-progress', 'Sync must keep newer local In Process over stale pending remote');
+      check(_chooseFindingForSync(submitted, reopened).status === 'in-progress', 'Sync must keep newer remote In Process over stale pending local');
 
       const manualOpen = clone(submitted);
       manualOpen.status = 'open';
