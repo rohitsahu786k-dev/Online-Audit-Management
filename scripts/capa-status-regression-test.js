@@ -83,6 +83,45 @@ async function main() {
       check(helperCase.decision === 'reject', 'Reopen helper should stamp reject decision');
       check(!_hasUnreviewedClosureSubmission(helperCase), 'Reopen helper should clear unreviewed submission state');
 
+      // Reproduces the production bug: closureDate stored as ambiguous en-IN "DD/MM/YYYY"
+      // (e.g. "08/07/2026" = 8 Jul) was being misread by Date.parse() as US "MM/DD/YYYY"
+      // (7 Aug), landing AFTER the auditor's real reject decision and permanently
+      // resurrecting the finding back to "Submit For Review" on every sync/reload.
+      check(_parseAuditTimestamp('08/07/2026') < _parseAuditTimestamp('09 Jul 2026, 5:44 pm'),
+        'Ambiguous D/M/Y closureDate must parse as 8 Jul, not misread as 7 Aug');
+
+      const ambiguousDateCase = {
+        id: 'find_DES_2026_003',
+        ref: 'DES-2026-003',
+        status: 'in-progress',
+        capaStatus: 'in-progress',
+        closureEvidence: 'Updated Production file check list',
+        closureSubmittedBy: 'Dept SPOC',
+        closureDate: '08/07/2026',
+        closureSubmittedAt: '2026-07-08T07:34:00.000Z',
+        decision: 'reject',
+        decisionComments: 'Needs correction',
+        decisionDate: '09 Jul 2026, 5:44 pm',
+        decisionAt: '2026-07-09T12:14:00.000Z',
+        statusChangedAt: '2026-07-09T12:14:00.000Z',
+        updatedAt: '2026-07-09T12:14:00.000Z',
+        activityLog: [
+          { user: 'Dept SPOC', action: 'Submitted for review', ts: '08 Jul 2026, 1:04 pm' },
+          { user: 'Auditor', action: 'Closure REJECTED — Needs correction', ts: '09 Jul 2026, 5:44 pm' }
+        ]
+      };
+      check(!_hasUnreviewedClosureSubmission(ambiguousDateCase), 'Reject must stick even with ambiguous D/M/Y closureDate');
+      check(findingWorkflowStatus(ambiguousDateCase) === 'in-progress', 'Ambiguous-date case must show In Process, not Submit For Review');
+      // Simulate the record going overdue and re-syncing/reloading repeatedly — it must not resurrect.
+      const overdueCopy = clone(ambiguousDateCase);
+      overdueCopy.status = 'delayed';
+      overdueCopy.capaStatus = 'delayed';
+      for (let i = 0; i < 3; i++) {
+        const normalized = normalizeFindingSyncObject(overdueCopy);
+        check(normalized.status !== 'pending-closure', 'Overdue+reviewed finding must not resurrect to Submit For Review across repeated syncs (pass ' + i + ')');
+        check(normalized.decision === 'reject', 'Reject decision must survive repeated sync passes (pass ' + i + ')');
+      }
+
       return 'CAPA status regression checks passed';
     });
 
