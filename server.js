@@ -798,11 +798,36 @@ function normalizeAuditSeverity(severity) {
 function auditFindingCounts(findings) {
   const counts = { critical: 0, major: 0, minor: 0, obs: 0, total: 0 };
   (Array.isArray(findings) ? findings : []).forEach(finding => {
+    if (!isRealAuditFinding(finding)) return;
     const key = normalizeAuditSeverity(finding && (finding.sev ?? finding.severity));
     counts[key] += 1;
     counts.total += 1;
   });
   return counts;
+}
+
+function isRealAuditFinding(finding) {
+  if (!finding || typeof finding !== 'object') return false;
+  if (isDeletedFinding(finding)) return false;
+  return Boolean(String(finding.desc || finding.description || finding.ref || '').trim());
+}
+
+function sessionAuditFindingRows(session, audit) {
+  const findings = session && session.findings && typeof session.findings === 'object' ? session.findings : {};
+  const answers = session && session.answers && typeof session.answers === 'object' ? session.answers : {};
+  const sections = audit && Array.isArray(audit.sections) ? audit.sections : [];
+  const checkpointIds = new Set(
+    sections.flatMap(section => Array.isArray(section && section._checkpoints) ? section._checkpoints : [])
+      .map(checkpoint => String((checkpoint && checkpoint.id) || ''))
+      .filter(Boolean)
+  );
+  return Object.entries(findings)
+    .filter(([qid, finding]) => {
+      if (!isRealAuditFinding(finding)) return false;
+      if (answers && Object.prototype.hasOwnProperty.call(answers, qid)) return answers[qid] === 'no';
+      return !checkpointIds.size || checkpointIds.has(String(qid));
+    })
+    .map(([, finding]) => finding);
 }
 
 function auditScoreFromCounts(counts) {
@@ -832,7 +857,7 @@ function completedAuditCompleteness(audit) {
   if (audit.auditFindingCountsFrozen && typeof audit.auditFindingCountsFrozen === 'object') {
     score += Number(audit.auditFindingCountsFrozen.total || 0);
   }
-  if (audit.session && audit.session.findings) score += Object.keys(audit.session.findings).length;
+  if (audit.session && audit.session.findings) score += sessionAuditFindingRows(audit.session, audit).length;
   return score;
 }
 
@@ -867,11 +892,12 @@ function repairCompletedAuditScores(audits, findings) {
         || explicitRefs.has(String(finding.ref || ''))
       )
     ));
-    if (!rows.length) return audit;
-    const counts = auditFindingCounts(rows);
+    const scoreRows = rows.length ? rows : sessionAuditFindingRows(audit.session, audit);
+    if (!scoreRows.length) return audit;
+    const counts = auditFindingCounts(scoreRows);
     return {
       ...audit,
-      findingRefs: rows.map(finding => finding.ref).filter(Boolean),
+      findingRefs: rows.length ? rows.map(finding => finding.ref).filter(Boolean) : (audit.findingRefs || []),
       auditScoreFrozen: auditScoreFromCounts(counts),
       auditFindingCountsFrozen: counts,
       status: audit.status || 'submitted'

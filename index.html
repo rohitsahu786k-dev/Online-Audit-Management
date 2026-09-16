@@ -999,7 +999,7 @@ function _completedAuditCompleteness(a){
   var score=a.auditScoreFrozen!==undefined?1:0;
   score+=Array.isArray(a.findingRefs)?a.findingRefs.length:0;
   score+=a.auditFindingCountsFrozen?Number(a.auditFindingCountsFrozen.total||0):0;
-  score+=a.session&&a.session.findings?Object.keys(a.session.findings).length:0;
+  score+=a.session&&a.session.findings?sessionAuditFindingRows(a.session,a).length:0;
   return score;
 }
 function _isBadDerivedCompletedAudit(a){
@@ -2428,6 +2428,7 @@ function auditScoreStatus(score){return score>=80?'Compliant':score>=60?'At Risk
 function auditFindingCounts(findings){
   var c=0,ma=0,mi=0,ob=0;
   (findings||[]).forEach(function(f){
+    if(!isRealAuditFinding(f))return;
     var sev=normalizeAuditSeverity(f&&((f.sev!==undefined?f.sev:f.severity)));
     if(sev==='critical')c++;
     else if(sev==='major')ma++;
@@ -2436,8 +2437,32 @@ function auditFindingCounts(findings){
   });
   return {critical:c,major:ma,minor:mi,obs:ob,total:c+ma+mi+ob};
 }
+function isRealAuditFinding(f){
+  if(!f||typeof f!=='object')return false;
+  if(f.deletedAt||String(f.status||'').toLowerCase()==='draft')return false;
+  return !!String(f.desc||f.description||f.ref||'').trim();
+}
+function sessionAuditFindingEntries(session,audit){
+  session=session||{};
+  var findings=(session.findings&&typeof session.findings==='object')?session.findings:{};
+  var answers=(session.answers&&typeof session.answers==='object')?session.answers:{};
+  var checkpointIds={};
+  ((audit&&audit.sections)||[]).forEach(function(section){
+    (section._checkpoints||[]).forEach(function(q){if(q&&q.id)checkpointIds[String(q.id)]=1;});
+  });
+  var hasCheckpointIds=Object.keys(checkpointIds).length>0;
+  return Object.entries(findings).filter(function(entry){
+    var qid=entry[0],finding=entry[1];
+    if(!isRealAuditFinding(finding))return false;
+    if(Object.prototype.hasOwnProperty.call(answers,qid))return answers[qid]==='no';
+    return !hasCheckpointIds||checkpointIds[String(qid)];
+  });
+}
+function sessionAuditFindingRows(session,audit){
+  return sessionAuditFindingEntries(session,audit).map(function(entry){return entry[1];});
+}
 function auditScoreFromSessionFindings(session){
-  return auditScore(Object.values((session&&session.findings)||{}));
+  return auditScore(sessionAuditFindingRows(session,null));
 }
 function completedAuditKey(audit){
   if(!audit)return '';
@@ -2487,7 +2512,7 @@ function normalizeCompletedAuditsData(data){
     if(audit!==raw)changed=true;
     var updates={};
     var rows=typeof auditFindingRows==='function'?auditFindingRows(audit):[];
-    var sessionRows=audit.session&&audit.session.findings?Object.values(audit.session.findings):[];
+    var sessionRows=audit.session&&audit.session.findings?sessionAuditFindingRows(audit.session,audit):[];
     var scoreRows=rows.length?rows:sessionRows;
     if(scoreRows.length){
       var fixedScore=auditScore(scoreRows);
@@ -2531,7 +2556,7 @@ function frozenAuditScore(audit){
   var frozen=Number(audit.auditScoreFrozen);
   if(Number.isFinite(frozen))return Math.min(100,Math.max(0,Math.round(frozen)));
   if(audit.auditFindingCountsFrozen)return scoreFromFindingCounts(audit.auditFindingCountsFrozen);
-  if(audit.session&&audit.session.findings)return auditScoreFromSessionFindings(audit.session);
+  if(audit.session&&audit.session.findings)return auditScore(sessionAuditFindingRows(audit.session,audit));
   if(typeof auditFindingRows==='function'){
     var rows=auditFindingRows(audit);
     if(rows.length)return auditScore(rows);
@@ -2657,7 +2682,7 @@ function auditFindingRows(audit){
   var registerRows=registerFindingsForAudit(audit);
   var byRef={};registerRows.forEach(function(f){if(f.ref)byRef[f.ref]=f;});
   var refs=audit.findingRefs||[];
-  var sessionFindings=audit.session&&audit.session.findings?Object.entries(audit.session.findings):[];
+  var sessionFindings=audit.session&&audit.session.findings?sessionAuditFindingEntries(audit.session,audit):[];
   var cps=(audit.sections||[]).flatMap(function(s){return s._checkpoints||[];});
   if(sessionFindings.length){
     return sessionFindings.map(function(entry,idx){
@@ -4626,7 +4651,7 @@ function showDeptReport(code){
     return '<div class="txs td mb2">Latest audit: '+(latest.ref||'')+' · '+(latest.auditor||'')+' · '+(latest.submittedAt?new Date(latest.submittedAt).toLocaleDateString():'')+'</div>'+
     '<div class="tw mb3"><table><thead><tr><th>#</th><th>Clause</th><th>Question</th><th>Result</th><th>Observation</th></tr></thead><tbody>'+
     allQ.map(function(q,i){
-      var ans=sess.answers?sess.answers[q.id]:'';var finding=sess.findings?sess.findings[q.id]:null;var note=sess.notes?sess.notes[q.id]||'':'';
+      var ans=sess.answers?sess.answers[q.id]:'';var finding=sess.findings&&ans==='no'&&isRealAuditFinding(sess.findings[q.id])?sess.findings[q.id]:null;var note=sess.notes?sess.notes[q.id]||'':'';
       var color=ans==='yes'?'green':ans==='no'?'red':ans==='na'?'text3':'amber';
       var label=ans==='yes'?'✅ Compliant':ans==='no'?'❌ Non-Compliant':ans==='na'?'N/A':'⏭ Skipped';
       return '<tr style="background:'+(ans==='no'?'var(--red-bg)':ans==='yes'?'var(--green-bg)':'inherit')+';"><td>'+(i+1)+'</td><td>'+badge('b-blue',q.clause||'—')+'</td><td style="max-width:280px;">'+q.text+'</td><td><span style="color:var(--'+color+');font-weight:700;">'+label+'</span></td><td style="font-size:11px;">'+((finding?'⚠ '+finding.desc+' ':'')+note)+'</td></tr>';
@@ -4718,7 +4743,7 @@ function genDeptPDF(code){
       doc.text('Audit Checklist Results ('+allQ.length+' questions)',14,nextY+4);
       var chkRows=allQ.map(function(q,i){
         var ans=sess.answers?sess.answers[q.id]:'';
-        var finding=sess.findings?sess.findings[q.id]:null;
+        var finding=sess.findings&&ans==='no'&&isRealAuditFinding(sess.findings[q.id])?sess.findings[q.id]:null;
         var note=sess.notes?sess.notes[q.id]||'':'';
         return[String(i+1),q.clause||'',q.text||'',ans==='yes'?'Compliant':ans==='no'?'Non-Compliant':ans==='na'?'N/A':'Skipped',(finding?finding.desc+' ':'')+note];
       });
@@ -5893,9 +5918,38 @@ function renderAdmBody(t='users'){
 }
 function resetUserPw(id){
   const u=APP.users.find(x=>x.id===id);if(!u)return;
-  const np=prompt('Enter new password for '+u.name+' (min 6 chars):');
-  if(!np||np.length<6){showToast('⚠ Password must be at least 6 characters');return;}
-  const U=APP.users;const usr=U.find(x=>x.id===id);if(usr){usr.password=np;APP.users=U;showToast('✅ Password reset for '+u.name);}
+  const suggested=generateAdminPassword();
+  const np=prompt('Current password cannot be viewed because it is stored as a secure hash.\n\nEnter new password for '+u.name+' or use the generated one below:',suggested);
+  if(!np||np.length<6){showToast('Password must be at least 6 characters');return;}
+  const U=APP.users;const usr=U.find(x=>x.id===id);
+  if(usr){
+    usr.password=np;
+    APP.users=U;
+    refreshUsersFromServer()
+      .then(function(){
+        renderAdmBody('users');
+        copyText(np);
+        alert('Password reset for '+u.name+'.\n\nNew password: '+np+'\n\nShare it securely. It will not be viewable again after this.');
+        showToast('Password reset and copied');
+      })
+      .catch(function(e){showToast('Password saved, refresh failed: '+e.message);});
+  }
+}
+function generateAdminPassword(){
+  const alphabet='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+  let body='';
+  if(window.crypto&&window.crypto.getRandomValues){
+    const bytes=new Uint8Array(10);window.crypto.getRandomValues(bytes);
+    body=Array.from(bytes).map(function(b){return alphabet[b%alphabet.length];}).join('');
+  }else{
+    for(let i=0;i<10;i++)body+=alphabet[Math.floor(Math.random()*alphabet.length)];
+  }
+  return 'OnePWS@'+body+'!';
+}
+function copyText(text){
+  try{
+    if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(String(text||'')).catch(function(){});
+  }catch(_e){}
 }
 function saveSystemSettings(){
   LS.set('ap_show_creds',false);
@@ -7227,7 +7281,11 @@ function submitAudit(){
   const unanswered=allQ.filter(q=>!AS.answers[q.id]).length;
   if(unanswered>0){showToast('⚠ '+unanswered+' unanswered. Mark N/A or answer all before submitting.',4000);return;}
   // Save audit findings to the Findings Register
-  const F=APP.findings;const auditFindings={...AS.findings};
+  const F=APP.findings;const auditFindings={};
+  Object.entries(AS.findings||{}).forEach(function(entry){
+    var qId=entry[0],finding=entry[1];
+    if(AS.answers[qId]==='no'&&isRealAuditFinding(finding))auditFindings[qId]=finding;
+  });
   const submittedAt=new Date().toISOString();
   const auditScoreFrozen=auditScore(Object.values(auditFindings));
   const auditFindingCountsFrozen=auditFindingCounts(Object.values(auditFindings));
@@ -7336,7 +7394,7 @@ function showAuditCompletionReport(audit,sessionData){
   const yes=allQ.filter(q=>session.answers[q.id]==='yes').length;
   const no=allQ.filter(q=>session.answers[q.id]==='no').length;
   const na=allQ.filter(q=>session.answers[q.id]==='na').length;
-  const finds=Object.values(session.findings||{});
+  const finds=sessionAuditFindingRows(session,audit);
   const score=typeof audit.auditScoreFrozen==='number'?audit.auditScoreFrozen:auditScore(finds);
   const sc=auditScoreColor(score);
   mc.innerHTML='<div class="card sg" style="border:2px solid var(--brand);">'+
@@ -7352,7 +7410,7 @@ function showAuditCompletionReport(audit,sessionData){
     '<div style="text-align:center;background:var(--bg3);border-radius:7px;padding:12px;"><div style="font-size:22px;font-weight:900;">'+na+'</div><div class="txx td">N/A</div></div></div>'+
     '<div class="ch"><span class="dot" style="background:var(--green)"></span>Full Checklist Results ('+allQ.length+' questions)</div>'+
     '<div class="tw mb3"><table><thead><tr><th>#</th><th>Clause</th><th>Question</th><th>Result</th><th>Observation</th></tr></thead><tbody>'+
-    allQ.map(function(q,i){var ans=session.answers?session.answers[q.id]:'';var note=session.notes?session.notes[q.id]||'':'';var finding=session.findings?session.findings[q.id]:null;var color=ans==='yes'?'green':ans==='no'?'red':ans==='na'?'text3':'amber';var label=ans==='yes'?'✅ Compliant':ans==='no'?'❌ Non-Compliant':ans==='na'?'N/A':'⏭ Skipped';return '<tr style="background:'+(ans==='no'?'var(--red-bg)':ans==='yes'?'var(--green-bg)':'inherit')+';"><td class="pr">'+(i+1)+'</td><td>'+badge('b-blue',q.clause||'—')+'</td><td style="max-width:300px;">'+q.text+'</td><td><span style="color:var(--'+color+');font-weight:700;">'+label+'</span></td><td style="font-size:11px;">'+((finding?'⚠ '+finding.desc+' ':'')+note)+'</td></tr>';}).join('')+
+    allQ.map(function(q,i){var ans=session.answers?session.answers[q.id]:'';var note=session.notes?session.notes[q.id]||'':'';var finding=session.findings&&ans==='no'&&isRealAuditFinding(session.findings[q.id])?session.findings[q.id]:null;var color=ans==='yes'?'green':ans==='no'?'red':ans==='na'?'text3':'amber';var label=ans==='yes'?'✅ Compliant':ans==='no'?'❌ Non-Compliant':ans==='na'?'N/A':'⏭ Skipped';return '<tr style="background:'+(ans==='no'?'var(--red-bg)':ans==='yes'?'var(--green-bg)':'inherit')+';"><td class="pr">'+(i+1)+'</td><td>'+badge('b-blue',q.clause||'—')+'</td><td style="max-width:300px;">'+q.text+'</td><td><span style="color:var(--'+color+');font-weight:700;">'+label+'</span></td><td style="font-size:11px;">'+((finding?'⚠ '+finding.desc+' ':'')+note)+'</td></tr>';}).join('')+
     '</tbody></table></div>'+
     (finds.length?'<div class="ch"><span class="dot" style="background:var(--red)"></span>Non-Conformances Summary ('+finds.length+')</div>'+
     '<div class="tw mb3"><table><thead><tr><th>#</th><th>Description</th><th>Severity</th><th>Root Cause</th></tr></thead><tbody>'+
@@ -7360,7 +7418,7 @@ function showAuditCompletionReport(audit,sessionData){
     '</tbody></table></div>':'<div class="info-box mb3">No non-conformances — full compliance!</div>')+
     (function(){
       var photos=[];
-      if(session.findings){Object.values(session.findings).forEach(function(f){if(f.files&&f.files.length)photos.push(f);});}
+      sessionAuditFindingRows(session,audit).forEach(function(f){if(f.files&&f.files.length)photos.push(f);});
       if(!photos.length)return '';
       return '<div class="ch"><span class="dot" style="background:var(--teal)"></span>Before vs After Photo Evidence</div>'+
         photos.map(function(f){
@@ -7398,13 +7456,14 @@ function downloadCompletionPDF(){
   const allQ=(audit.sections||[]).flatMap(s=>s._checkpoints||[]);
   const yes=allQ.filter(q=>sess.answers[q.id]==='yes').length;
   const no=allQ.filter(q=>sess.answers[q.id]==='no').length;
-  const score=typeof audit.auditScoreFrozen==='number'?audit.auditScoreFrozen:auditScoreFromSessionFindings(sess);
-  doc.text('Audit Score: '+score+'%  |  Questions: '+allQ.length+'  |  Findings: '+Object.keys(sess.findings||{}).length,14,38);
+  const pdfFinds=sessionAuditFindingRows(sess,audit);
+  const score=typeof audit.auditScoreFrozen==='number'?audit.auditScoreFrozen:auditScore(pdfFinds);
+  doc.text('Audit Score: '+score+'%  |  Questions: '+allQ.length+'  |  Findings: '+pdfFinds.length,14,38);
   // Full checklist results table
-  const chkRows=allQ.map(function(q,i){var ans=sess.answers?sess.answers[q.id]:'';var finding=sess.findings?sess.findings[q.id]:null;var note=sess.notes?sess.notes[q.id]||'':'';return[(i+1),q.clause||'—',q.text,ans==='yes'?'Compliant':ans==='no'?'Non-Compliant':ans==='na'?'N/A':'Skipped',(finding?finding.desc+' ':'')+note];});
+  const chkRows=allQ.map(function(q,i){var ans=sess.answers?sess.answers[q.id]:'';var finding=sess.findings&&ans==='no'&&isRealAuditFinding(sess.findings[q.id])?sess.findings[q.id]:null;var note=sess.notes?sess.notes[q.id]||'':'';return[(i+1),q.clause||'—',q.text,ans==='yes'?'Compliant':ans==='no'?'Non-Compliant':ans==='na'?'N/A':'Skipped',(finding?finding.desc+' ':'')+note];});
   doc.autoTable({startY:44,head:[['#','Clause','Question','Result','Observation']],body:chkRows,styles:{fontSize:7,cellPadding:2,overflow:'linebreak'},headStyles:{fillColor:[37,99,235],textColor:255},margin:{left:14,right:14},columnStyles:{2:{cellWidth:55},4:{cellWidth:40}}});
   // NC summary
-  const finds=Object.values(sess.findings||{});
+  const finds=pdfFinds;
   if(finds.length){
     doc.autoTable({startY:doc.lastAutoTable.finalY+8,head:[['#','Finding','Severity','Root Cause']],body:finds.map(function(f,i){return[(i+1),f.desc||'',SEV_LABEL[f.severity]||f.severity,f.rc||'—'];}),styles:{fontSize:8,overflow:'linebreak'},headStyles:{fillColor:[192,57,43],textColor:255},margin:{left:14,right:14}});
   }
