@@ -2174,8 +2174,8 @@ function canAccessCapaFinding(f,role){
   var u=APP.currentUser||{};
   role=role||u.role;
   if(!f)return false;
-  if(role==='spoc')return String(f.dept||'')===String(u.dept||'');
-  if(role==='manager')return managerDeptCodes(u).indexOf(f.dept)>-1;
+  if(role==='spoc')return findingMatchesDeptCode(f,u.dept);
+  if(role==='manager')return deptCodeInList(f.dept,managerDeptCodes(u))||deptCodeInList(f.deptName,managerDeptCodes(u));
   return role==='admin'||role==='auditor'||role==='viewer';
 }
 function canReviewCapaStatus(role){
@@ -2673,7 +2673,7 @@ function registerFindingsForAudit(audit){
   var auditKeys=new Set([audit.id,audit.ref].filter(Boolean).map(String));
   var refs=new Set((audit.findingRefs||[]).map(String));
   return (APP.findings||[]).filter(function(f){
-    if(!f||f.dept!==audit.dept)return false;
+    if(!f||!findingMatchesDeptCode(f,audit.dept))return false;
     return refs.has(String(f.ref||''))||auditKeys.has(String(f.auditId||''))||auditKeys.has(String(f.auditRef||''));
   });
 }
@@ -2718,7 +2718,7 @@ function findingClosedDate(f,yr){
 }
 function cumulativeClosureRateAt(findings,deptCode,monthEnd,yr){
   var rows=(findings||[]).filter(function(f){
-    if(deptCode&&f.dept!==deptCode)return false;
+    if(deptCode&&!findingMatchesDeptCode(f,deptCode))return false;
     var raised=findingRaisedDate(f,yr);
     return raised&&raised<=monthEnd;
   });
@@ -2732,7 +2732,7 @@ function cumulativeClosureRateAt(findings,deptCode,monthEnd,yr){
 }
 function closureTrendDeptHasData(findings,deptCode,yr){
   return (findings||[]).some(function(f){
-    if(deptCode&&f.dept!==deptCode)return false;
+    if(deptCode&&!findingMatchesDeptCode(f,deptCode))return false;
     var raised=findingRaisedDate(f,yr),closed=findingClosedDate(f,yr);
     return (raised&&raised.getFullYear()<=yr)||(closed&&closed.getFullYear()===yr);
   });
@@ -2983,7 +2983,7 @@ function buildNav(){
       d.className='ni'+(APP.currentPage===it.id?' active':'');
       d.id='ni-'+it.id;
       let bHTML='';
-      if(it.badge==='findings'){const _su=APP.currentUser;const n=APP.findings.filter(f=>f.status!=='closed'&&(_su?.role!=='spoc'||f.dept===_su?.dept)&&(_su?.role!=='manager'||managerDeptCodes(_su).includes(f.dept))).length;if(n>0)bHTML=`<span class="nb nb-r">${n}</span>`;}
+      if(it.badge==='findings'){const _su=APP.currentUser;const n=APP.findings.filter(f=>f.status!=='closed'&&(_su?.role!=='spoc'||findingMatchesDeptCode(f,_su?.dept))&&(_su?.role!=='manager'||deptCodeInList(f.dept,managerDeptCodes(_su))||deptCodeInList(f.deptName,managerDeptCodes(_su)))).length;if(n>0)bHTML=`<span class="nb nb-r">${n}</span>`;}
       if(it.badge==='capa'){const n=APP.findings.filter(f=>{const ws=findingWorkflowStatus(f);return u.role==='auditor'?ws==='pending-closure':(ws==='pending-closure'||ws==='delayed');}).length;if(n>0)bHTML=`<span class="nb nb-a">${n}</span>`;}
       d.innerHTML=`<span class="ico">${icon(it.ico)}</span><span>${it.l}</span>${bHTML}`;
       d.onclick=()=>navigate(it.id);
@@ -3218,6 +3218,14 @@ function deptNameForFinding(f){
 function findingMatchesDept(f,d){
   if(!f||!d)return false;
   return deptValuesMatch(f.dept,d.code)||deptValuesMatch(f.deptName,d.code)||deptValuesMatch(f.dept,d.name)||deptValuesMatch(f.deptName,d.name);
+}
+function findingMatchesDeptCode(f,code){
+  var d=deptRecordForValue(code);
+  if(d)return findingMatchesDept(f,d);
+  return deptValuesMatch(f&&f.dept,code)||deptValuesMatch(f&&f.deptName,code);
+}
+function deptCodeInList(value,codes){
+  return (codes||[]).some(function(code){return deptValuesMatch(value,code);});
 }
 function isFindingPastDue(f){
   var due=localDateOnly(f&&f.due);
@@ -3607,8 +3615,8 @@ function createAudit(){
 // ═══════════════════════════════════════════════════
 function renderDashboard(){
   var _allF=filteredFindings();var _isSpoc=APP.currentUser?.role==='spoc';var _spocDept=APP.currentUser?.dept||'';
-  const F=_isSpoc?_allF.filter(f=>f.dept===_spocDept):_allF;const open=F.filter(f=>f.status!=='closed').length;
-  const visibleDepts=_isSpoc?APP.depts.filter(d=>d.code===_spocDept):APP.depts;
+  const F=_isSpoc?_allF.filter(f=>findingMatchesDeptCode(f,_spocDept)):_allF;const open=F.filter(f=>f.status!=='closed').length;
+  const visibleDepts=_isSpoc?APP.depts.filter(d=>deptValuesMatch(d.code,_spocDept)):APP.depts;
   const overallAuditScore=orgLatestAuditScore(visibleDepts);
   const deptScores=visibleDepts.map(d=>{
     const df=F.filter(f=>findingMatchesDept(f,d));
@@ -3844,9 +3852,9 @@ function renderDashboard(){
 function renderAnalytics(){
   var _isSpoc2=APP.currentUser?.role==='spoc';var _sDept2=APP.currentUser?.dept||'';
   const _baseFindings2=filteredFindings();
-  const F=_isSpoc2?_baseFindings2.filter(f=>f.dept===_sDept2):_baseFindings2;
-  const trendFindings=_isSpoc2?APP.findings.filter(f=>f.dept===_sDept2):APP.findings;
-  const depts=_isSpoc2?APP.depts.filter(d=>d.code===_sDept2):APP.depts;
+  const F=_isSpoc2?_baseFindings2.filter(f=>findingMatchesDeptCode(f,_sDept2)):_baseFindings2;
+  const trendFindings=_isSpoc2?APP.findings.filter(f=>findingMatchesDeptCode(f,_sDept2)):APP.findings;
+  const depts=_isSpoc2?APP.depts.filter(d=>deptValuesMatch(d.code,_sDept2)):APP.depts;
   const closed=F.filter(f=>f.status==='closed').length;
   const delayed=F.filter(f=>findingWorkflowStatus(f)==='delayed').length;
   const repeat=F.filter(f=>f.type==='repeat').length;
@@ -3865,13 +3873,13 @@ function renderAnalytics(){
       var isFutureMonth=yr>now.getFullYear()||(yr===now.getFullYear()&&m>now.getMonth());
       var auditThisMonth=latestDeptAuditInMonth(deptCode,yr,m);
       var hasClosureData=!isFutureMonth&&trendFindings.some(function(f){
-        if(deptCode&&f.dept!==deptCode)return false;
+        if(deptCode&&!findingMatchesDeptCode(f,deptCode))return false;
         var raised=findingRaisedDate(f,yr);
         return raised&&raised<=monthEnd;
       });
       var asOfDate=hasClosureData?monthEnd:null;
       var mFinds=hasClosureData?trendFindings.filter(function(f){
-        if(deptCode&&f.dept!==deptCode)return false;
+        if(deptCode&&!findingMatchesDeptCode(f,deptCode))return false;
         var raised=findingRaisedDate(f,yr);
         return raised&&raised<=asOfDate;
       }):[];
@@ -3953,7 +3961,7 @@ function renderAnalytics(){
     <div class="card">
       <div class="ch"><span class="dot" style="background:var(--red)"></span>Dept Delay Insights</div>
       ${depts.slice(0,5).map(d=>{
-        const od=F.filter(f=>f.dept===d.code&&findingWorkflowStatus(f)==='delayed').length;
+        const od=F.filter(f=>findingMatchesDeptCode(f,d.code)&&findingWorkflowStatus(f)==='delayed').length;
         if(!od)return'';
         return`<div class="fb tsm mb1"><span class="f7">${d.name}</span>${badge('b-red',od+' overdue')}</div><div class="prog mb2"><div class="pf" style="width:${Math.min(100,od*25)}%;background:var(--red)"></div></div>`;
       }).join('')||'<div class="txs td">No overdue CAPAs</div>'}
@@ -3975,7 +3983,7 @@ function renderAnalytics(){
   <div class="grid g2 sg">
     <div class="card">
       <div class="ch fb"><div class="flex g2u"><span class="dot" style="background:var(--brand)"></span>AI Predictive Risk</div><button class="btn btn-ghost btn-sm" onclick="exportAnalyticsPDF()">Export PDF</button></div>
-      ${(function(){const dRisk=depts.map(d=>{const df=F.filter(f=>f.dept===d.code&&f.status!=='closed');const p=df.length?Math.min(100,df.length*12):0;const col=p>=60?'red':p>=30?'amber':'green';const clauses=[...new Set(df.map(f=>f.clause))].slice(0,3).join(', ')||'No issues';return[d.name,''+p,col,clauses];}).filter(x=>parseInt(x[1])>0).sort((a,b)=>parseInt(b[1])-parseInt(a[1])).slice(0,3);return dRisk.length?dRisk:[['-','0','green','No data yet']];})().map(([d,p,c,t])=>`
+      ${(function(){const dRisk=depts.map(d=>{const df=F.filter(f=>findingMatchesDeptCode(f,d.code)&&f.status!=='closed');const p=df.length?Math.min(100,df.length*12):0;const col=p>=60?'red':p>=30?'amber':'green';const clauses=[...new Set(df.map(f=>f.clause))].slice(0,3).join(', ')||'No issues';return[d.name,''+p,col,clauses];}).filter(x=>parseInt(x[1])>0).sort((a,b)=>parseInt(b[1])-parseInt(a[1])).slice(0,3);return dRisk.length?dRisk:[['-','0','green','No data yet']];})().map(([d,p,c,t])=>`
       <div style="background:var(--${c}-bg);border:1px solid;border-color:var(--${c});border-radius:8px;padding:9px;margin-bottom:8px;">
         <div class="fb mb1"><span class="f7 tsm">${d}</span>${badge('b-'+c,p+'% risk')}</div>
         <div class="txs td mb2">${t}</div>
@@ -4000,8 +4008,8 @@ function exportAnalyticsPDF(){
   if(!window.jspdf){showToast('PDF loading...');return;}
   var jsPDF=window.jspdf.jsPDF;var doc=new jsPDF();var pw=doc.internal.pageSize.getWidth();
   var _baseFindingsPdf=filteredFindings();
-  var F=APP.currentUser?.role==='spoc'?_baseFindingsPdf.filter(f=>f.dept===APP.currentUser?.dept):_baseFindingsPdf;
-  var depts=APP.currentUser?.role==='spoc'?APP.depts.filter(d=>d.code===APP.currentUser?.dept):APP.depts;
+  var F=APP.currentUser?.role==='spoc'?_baseFindingsPdf.filter(f=>findingMatchesDeptCode(f,APP.currentUser?.dept)):_baseFindingsPdf;
+  var depts=APP.currentUser?.role==='spoc'?APP.depts.filter(d=>deptValuesMatch(d.code,APP.currentUser?.dept)):APP.depts;
   var overallScore=orgLatestAuditScore(depts);
   doc.setFillColor(192,57,43);doc.rect(0,0,pw,26,'F');
   doc.setTextColor(255);doc.setFontSize(13);doc.setFont('helvetica','bold');
@@ -4015,7 +4023,7 @@ function exportAnalyticsPDF(){
     ['Closed',''+F.filter(f=>f.status==='closed').length]
   ],styles:{fontSize:9},headStyles:{fillColor:[192,57,43],textColor:255},margin:{left:14,right:14}});
   doc.autoTable({startY:doc.lastAutoTable.finalY+8,head:[['Department','Total','Open','Closed','Audit Score','Closure %']],
-    body:depts.filter(d=>F.some(f=>f.dept===d.code)||latestDeptAuditScore(d.code)).map(d=>{var df=F.filter(f=>f.dept===d.code);var s=latestDeptAuditScore(d.code);return[d.name,df.length,df.filter(f=>f.status!=='closed').length,df.filter(f=>f.status==='closed').length,(s&&typeof s.score==='number')?s.score+'%':'N/A',closureRate(df)+'%'];}),
+    body:depts.filter(d=>F.some(f=>findingMatchesDeptCode(f,d.code))||latestDeptAuditScore(d.code)).map(d=>{var df=F.filter(f=>findingMatchesDeptCode(f,d.code));var s=latestDeptAuditScore(d.code);return[d.name,df.length,df.filter(f=>f.status!=='closed').length,df.filter(f=>f.status==='closed').length,(s&&typeof s.score==='number')?s.score+'%':'N/A',closureRate(df)+'%'];}),
     styles:{fontSize:9},headStyles:{fillColor:[37,99,235],textColor:255},margin:{left:14,right:14}});
   doc.setFontSize(7);doc.setTextColor(150);doc.text('OnePWS Pvt. Ltd. | Analytics | '+new Date().toLocaleString(),pw/2,287,{align:'center'});
   doc.save('OnePWS_Analytics_'+Date.now()+'.pdf');showToast('PDF downloaded!');
@@ -4023,14 +4031,14 @@ function exportAnalyticsPDF(){
 function exportAnalyticsExcel(){
   if(!window.XLSX){showToast('Excel loading...');return;}
   var _baseFindingsXls=filteredFindings();
-  var F=APP.currentUser?.role==='spoc'?_baseFindingsXls.filter(f=>f.dept===APP.currentUser?.dept):_baseFindingsXls;
-  var trendFindings=APP.currentUser?.role==='spoc'?APP.findings.filter(f=>f.dept===APP.currentUser?.dept):APP.findings;
-  var depts=APP.currentUser?.role==='spoc'?APP.depts.filter(d=>d.code===APP.currentUser?.dept):APP.depts;
+  var F=APP.currentUser?.role==='spoc'?_baseFindingsXls.filter(f=>findingMatchesDeptCode(f,APP.currentUser?.dept)):_baseFindingsXls;
+  var trendFindings=APP.currentUser?.role==='spoc'?APP.findings.filter(f=>findingMatchesDeptCode(f,APP.currentUser?.dept)):APP.findings;
+  var depts=APP.currentUser?.role==='spoc'?APP.depts.filter(d=>deptValuesMatch(d.code,APP.currentUser?.dept)):APP.depts;
   var overallScore=orgLatestAuditScore(depts);
   var wb=XLSX.utils.book_new();
   var kpiData=[{KPI:'Total Findings',Value:F.length},{KPI:'Open',Value:F.filter(f=>f.status!=='closed').length},{KPI:'Audit Score',Value:overallScore===null?'N/A':overallScore+'%'},{KPI:'Closure Rate',Value:closureRate(F)+'%'},{KPI:'Closed',Value:F.filter(f=>f.status==='closed').length}];
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(kpiData),'KPIs');
-  var deptData=depts.filter(d=>F.some(f=>f.dept===d.code)||latestDeptAuditScore(d.code)).map(d=>{var df=F.filter(f=>f.dept===d.code);var s=latestDeptAuditScore(d.code);return{Department:d.name,Total:df.length,Open:df.filter(f=>f.status!=='closed').length,Closed:df.filter(f=>f.status==='closed').length,AuditScore:(s&&typeof s.score==='number')?s.score+'%':'N/A',ClosureRate:closureRate(df)+'%'};});
+  var deptData=depts.filter(d=>F.some(f=>findingMatchesDeptCode(f,d.code))||latestDeptAuditScore(d.code)).map(d=>{var df=F.filter(f=>findingMatchesDeptCode(f,d.code));var s=latestDeptAuditScore(d.code);return{Department:d.name,Total:df.length,Open:df.filter(f=>f.status!=='closed').length,Closed:df.filter(f=>f.status==='closed').length,AuditScore:(s&&typeof s.score==='number')?s.score+'%':'N/A',ClosureRate:closureRate(df)+'%'};});
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(deptData),'Departments');
   var ncSev={critical:1,major:1,minor:1};
   var clauseMap={};
@@ -4047,7 +4055,7 @@ function exportAnalyticsExcel(){
   var clauseData=Object.values(clauseMap).sort(function(a,b){return b.NCCount-a.NCCount||a.ClauseName.localeCompare(b.ClauseName);}).slice(0,10);
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(clauseData),'Recurring Clauses');
   var months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];var yr=new Date().getFullYear();var exportNow=new Date();
-  var monthlyData=depts.filter(d=>closureTrendDeptHasData(trendFindings,d.code,yr)||deptHasAuditInYear(d.code,yr)).map(d=>{var row={Department:d.name};months.forEach(function(mn,mi){var monthEnd=new Date(yr,mi+1,0,23,59,59,999);var isFutureMonth=yr>exportNow.getFullYear()||(yr===exportNow.getFullYear()&&mi>exportNow.getMonth());var audit=latestDeptAuditInMonth(d.code,yr,mi);var s=audit?frozenAuditScore(audit):null;var hasClosureData=!isFutureMonth&&trendFindings.some(function(f){if(f.dept!==d.code)return false;var raised=findingRaisedDate(f,yr);return raised&&raised<=monthEnd;});var cr=hasClosureData?cumulativeClosureRateAt(trendFindings,d.code,monthEnd,yr):null;row[mn+'_Score']=s!==null?s+'%':'—';row[mn+'_Closure']=cr!==null?cr+'%':'—';});return row;});
+  var monthlyData=depts.filter(d=>closureTrendDeptHasData(trendFindings,d.code,yr)||deptHasAuditInYear(d.code,yr)).map(d=>{var row={Department:d.name};months.forEach(function(mn,mi){var monthEnd=new Date(yr,mi+1,0,23,59,59,999);var isFutureMonth=yr>exportNow.getFullYear()||(yr===exportNow.getFullYear()&&mi>exportNow.getMonth());var audit=latestDeptAuditInMonth(d.code,yr,mi);var s=audit?frozenAuditScore(audit):null;var hasClosureData=!isFutureMonth&&trendFindings.some(function(f){if(!findingMatchesDeptCode(f,d.code))return false;var raised=findingRaisedDate(f,yr);return raised&&raised<=monthEnd;});var cr=hasClosureData?cumulativeClosureRateAt(trendFindings,d.code,monthEnd,yr):null;row[mn+'_Score']=s!==null?s+'%':'—';row[mn+'_Closure']=cr!==null?cr+'%':'—';});return row;});
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(monthlyData),'Monthly Trends');
   XLSX.writeFile(wb,'OnePWS_Analytics_'+Date.now()+'.xlsx');showToast('Excel exported!');
 }
@@ -4534,7 +4542,7 @@ function removeFile(cid,idx){
 // REPORTS
 // ═══════════════════════════════════════════════════
 function reportFindingsForDept(code){
-  let rows=filteredFindings().filter(f=>f.dept===code);
+  let rows=filteredFindings().filter(f=>findingMatchesDeptCode(f,code));
   const status=APP.reportStatusFilter||'completed';
   if(status==='completed'){
     rows=auditFindingRows(latestDeptAudit(code));
@@ -4869,7 +4877,7 @@ function renderFindingsTable(){
   const tbody=el('ftbody');const cnt=el('fcnt');if(!tbody)return;
   const q=(APP.findingsSearch||'').toLowerCase();
   let data=filterByDateRange(APP.findings,'due').filter(f=>{
-    if(APP.findingsDeptFilter&&f.dept!==APP.findingsDeptFilter)return false;
+    if(APP.findingsDeptFilter&&!findingMatchesDeptCode(f,APP.findingsDeptFilter))return false;
     if(APP.findingsSevFilter&&normalizeAuditSeverity(f.sev||f.severity)!==APP.findingsSevFilter)return false;
     if(APP.findingsStatusFilter&&f.status!==APP.findingsStatusFilter)return false;
     if(q&&![f.ref,f.deptName,f.desc,f.clause,SEV_LABEL[f.sev],STAT_LABEL[f.status]].join(' ').toLowerCase().includes(q))return false;
@@ -4912,7 +4920,7 @@ function rawFindings(){
 function canEditFindingRecord(f){
   var role=APP.currentUser&&APP.currentUser.role;
   if(role==='admin'||role==='auditor')return true;
-  if(role==='manager')return managerDeptCodes().indexOf(f&&f.dept)>-1;
+  if(role==='manager')return deptCodeInList(f&&f.dept,managerDeptCodes())||deptCodeInList(f&&f.deptName,managerDeptCodes());
   return false;
 }
 function canDeleteFindingRecord(f){
@@ -5015,8 +5023,8 @@ function exportFindingsExcel(){
 // CAPA
 // ═══════════════════════════════════════════════════
 function renderCapa(){
-  const F=filteredFindings();const uRole=APP.currentUser?.role;const uDept=APP.currentUser?.dept||'';const scoped=sortCapaRows((uRole==='spoc')?F.filter(f=>f.dept===uDept):(uRole==='manager'?F.filter(f=>managerDeptCodes().includes(f.dept)):F));const open=scoped.filter(f=>f.status!=='closed');
-  const deptOptions=(uRole==='spoc'?APP.depts.filter(d=>d.code===uDept):(uRole==='manager'?APP.depts.filter(d=>managerDeptCodes().includes(d.code)):APP.depts));
+  const F=filteredFindings();const uRole=APP.currentUser?.role;const uDept=APP.currentUser?.dept||'';const scoped=sortCapaRows((uRole==='spoc')?F.filter(f=>findingMatchesDeptCode(f,uDept)):(uRole==='manager'?F.filter(f=>deptCodeInList(f.dept,managerDeptCodes())||deptCodeInList(f.deptName,managerDeptCodes())):F));const open=scoped.filter(f=>f.status!=='closed');
+  const deptOptions=(uRole==='spoc'?APP.depts.filter(d=>deptValuesMatch(d.code,uDept)):(uRole==='manager'?APP.depts.filter(d=>deptCodeInList(d.code,managerDeptCodes())):APP.depts));
   const active=findCapa(APP.activeCapaId,scoped)||open[0]||scoped[0]||null;if(active)APP.activeCapaId=capaKey(active);
   return`
   <div class="grid g4 sg">
@@ -5257,7 +5265,7 @@ function reviewDec(dec){
 function exportCapaExcel(){
   if(!window.XLSX){showToast('Excel loading...');return;}
   const role=APP.currentUser?.role;
-  const rows=APP.findings.filter(f=>f.status!=='closed'&&(role!=='spoc'||f.dept===APP.currentUser?.dept)&&(role!=='manager'||managerDeptCodes().includes(f.dept)));
+  const rows=APP.findings.filter(f=>f.status!=='closed'&&(role!=='spoc'||findingMatchesDeptCode(f,APP.currentUser?.dept))&&(role!=='manager'||deptCodeInList(f.dept,managerDeptCodes())||deptCodeInList(f.deptName,managerDeptCodes())));
   const ws=XLSX.utils.json_to_sheet(rows.map(f=>({Ref:f.ref,Dept:f.deptName,Issue:f.desc,Severity:SEV_LABEL[f.sev],Clause:f.clause,Due:f.due,Status:STAT_LABEL[f.status]})));
   const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'CAPA');
   XLSX.writeFile(wb,`OnePWS_CAPA_${Date.now()}.xlsx`);showToast('📊 CAPA exported!');
@@ -6059,7 +6067,7 @@ function exportAll(){if(!canExportGlobalData()){showToast('Only Master Admin and
 function renderMytasks(){
   const u=APP.currentUser;const F=filterByDateRange(APP.findings,'due');const today=new Date();
   let tasks=[];
-  if(u.role==='spoc'){const spocDept=u.dept||'';F.filter(f=>f.status!=='closed'&&f.dept===spocDept).forEach(f=>{const due=new Date(f.due);const dl=Math.round((due-today)/86400000);tasks.push({id:capaKey(f),key:capaKey(f),title:'CAPA Action Required: '+f.ref+' - '+(f.desc||'').substring(0,45),type:'capa',status:dl<0?'overdue':dl<=3?'due-soon':'upcoming',dueDate:f.due,dl,pri:f.sev==='critical'?'P1':f.sev==='major'?'P2':'P3',link:'capa'});});}
+  if(u.role==='spoc'){const spocDept=u.dept||'';F.filter(f=>f.status!=='closed'&&findingMatchesDeptCode(f,spocDept)).forEach(f=>{const due=new Date(f.due);const dl=Math.round((due-today)/86400000);tasks.push({id:capaKey(f),key:capaKey(f),title:'CAPA Action Required: '+f.ref+' - '+(f.desc||'').substring(0,45),type:'capa',status:dl<0?'overdue':dl<=3?'due-soon':'upcoming',dueDate:f.due,dl,pri:f.sev==='critical'?'P1':f.sev==='major'?'P2':'P3',link:'capa'});});}
   if(u.role==='auditor'){F.filter(f=>findingWorkflowStatus(f)==='pending-closure').forEach(f=>{tasks.push({id:capaKey(f),key:capaKey(f),title:'Review Closure: '+f.ref+' ('+f.deptName+')',type:'review',status:'due-soon',dueDate:'ASAP',dl:0,pri:'P1',link:'capa'});});const _pa=LS.get('ap_planned_audits',[])||[];_pa.forEach((a,i)=>{tasks.push({id:'pa_'+i,title:'Execute: '+a.deptName+' - '+a.type,type:'audit',status:'upcoming',dueDate:a.date||'-',dl:3,pri:'P2',link:'execution'});});}
   if(u.role==='manager'){managerFindings().filter(f=>f.status!=='closed').forEach(f=>{const ws=findingWorkflowStatus(f);const due=new Date(f.due);const dl=Math.round((due-today)/86400000);tasks.push({id:capaKey(f),key:capaKey(f),title:'Manager Follow-up: '+f.ref+' - '+f.deptName,type:'manager',status:dl<0?'overdue':ws==='pending-closure'?'due-soon':'upcoming',dueDate:f.due||'ASAP',dl,pri:f.sev==='critical'?'P1':f.sev==='major'?'P2':'P3',link:'capa'});});}
   if(u.role==='admin'){F.filter(f=>f.status!=='closed').forEach(f=>{const due=new Date(f.due);const dl=Math.round((due-today)/86400000);tasks.push({id:capaKey(f),key:capaKey(f),title:'CAPA: '+f.ref+' - '+f.deptName+' (SPOC resp.)',type:'capa',status:dl<0?'overdue':dl<=3?'due-soon':'upcoming',dueDate:f.due,dl,pri:f.sev==='critical'?'P1':f.sev==='major'?'P2':'P3',link:'capa'});});F.filter(f=>findingWorkflowStatus(f)==='pending-closure').forEach(f=>{tasks.push({id:'rev_'+capaKey(f),key:capaKey(f),title:'Review Closure: '+f.ref,type:'review',status:'due-soon',dueDate:'ASAP',dl:0,pri:'P1',link:'capa'});});}
@@ -6091,19 +6099,19 @@ function managerDeptCodes(user){
   (APP.emailMaster||[]).forEach(r=>{if(r.reportingEmail&&user.email&&r.reportingEmail.toLowerCase()===user.email.toLowerCase())codes.add(r.deptCode);});
   return [...codes];
 }
-function canManageFinding(f){const u=APP.currentUser;if(!u)return false;if(u.role==='admin'||u.role==='auditor')return true;if(u.role!=='manager')return false;return managerDeptCodes(u).includes(f.dept);}
-function managerFindings(){const codes=managerDeptCodes();return filteredFindings().filter(f=>codes.includes(f.dept));}
+function canManageFinding(f){const u=APP.currentUser;if(!u)return false;if(u.role==='admin'||u.role==='auditor')return true;if(u.role!=='manager')return false;const codes=managerDeptCodes(u);return deptCodeInList(f&&f.dept,codes)||deptCodeInList(f&&f.deptName,codes);}
+function managerFindings(){const codes=managerDeptCodes();return filteredFindings().filter(f=>deptCodeInList(f.dept,codes)||deptCodeInList(f.deptName,codes));}
 function renderManagerPanel(){
   const u=APP.currentUser;
   if(!PERMS[u?.role]?.managerpanel)return '<div class="info-box">🔒 Manager Console access is disabled for your role.</div>';
   const codes=managerDeptCodes(u),F=managerFindings(),open=F.filter(f=>f.status!=='closed'),overdue=open.filter(f=>delayDays(f)>0);
-  const byDept=codes.map(code=>{const d=APP.depts.find(x=>x.code===code)||{code,name:code};const df=open.filter(f=>f.dept===code);return{code,name:d.name,total:df.length,overdue:df.filter(f=>delayDays(f)>0).length,critical:df.filter(f=>f.sev==='critical').length};});
+  const byDept=codes.map(code=>{const d=APP.depts.find(x=>deptValuesMatch(x.code,code))||{code,name:code};const df=open.filter(f=>findingMatchesDeptCode(f,code));return{code,name:d.name,total:df.length,overdue:df.filter(f=>delayDays(f)>0).length,critical:df.filter(f=>f.sev==='critical').length};});
   return `<div class="grid g3 sg"><div class="stat"><div class="sl">Managed Depts</div><div class="sv">${codes.length}</div></div><div class="stat"><div class="sl">Open NCs</div><div class="sv">${open.length}</div></div><div class="stat"><div class="sl">Overdue</div><div class="sv" style="color:var(--red)">${overdue.length}</div></div></div>
   <div class="card sg"><div class="ch"><span class="dot" style="background:var(--amber)"></span>Department Control</div><div class="tw"><table><thead><tr><th>Dept</th><th>Open</th><th>Overdue</th><th>Critical</th><th>Action</th></tr></thead><tbody>${byDept.map(r=>`<tr><td class="pr">${r.name}</td><td>${r.total}</td><td style="color:var(--red);font-weight:800">${r.overdue}</td><td>${r.critical}</td><td><button class="btn btn-ghost btn-sm" onclick="managerSendDeptReminder('${r.code}')">Reminder</button></td></tr>`).join('')||'<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:12px;">No managed departments mapped</td></tr>'}</tbody></table></div></div>
   <div class="card"><div class="fb mb2"><div class="ch" style="margin:0"><span class="dot" style="background:var(--red)"></span>Overdue / Open NCs</div><button class="btn btn-brand btn-sm" onclick="managerSendSummary()">Send Summary</button></div><div class="tw"><table><thead><tr><th>Ref</th><th>Dept</th><th>Issue</th><th>Severity</th><th>Due</th><th>Delay</th><th>Status</th><th>Action</th></tr></thead><tbody>${open.map(f=>`<tr><td class="pr">${f.ref}</td><td>${f.deptName}</td><td style="max-width:260px;">${sanitize((f.desc||'').substring(0,95))}</td><td>${badge(SEV_BADGE[f.sev]||'b-gray',SEV_LABEL[f.sev]||f.sev)}</td><td>${f.due||'-'}</td><td style="font-weight:800;color:${delayDays(f)>0?'var(--red)':'var(--text2)'}">${delayDays(f)}d</td><td>${badge(STAT_BADGE[f.status]||'b-gray',STAT_LABEL[f.status]||f.status)}</td><td><button class="btn btn-ghost btn-sm" onclick="openCapa(${attrJsArg(capaKey(f))})">Open</button></td></tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:12px;">No open NCs for managed departments</td></tr>'}</tbody></table></div></div>`;
 }
 function managerSendDeptReminder(code){
-  const rows=managerFindings().filter(f=>f.dept===code&&f.status!=='closed');if(!rows.length){showToast('No open NCs for this department');return;}
+  const rows=managerFindings().filter(f=>findingMatchesDeptCode(f,code)&&f.status!=='closed');if(!rows.length){showToast('No open NCs for this department');return;}
   const spocTo=spocEmails(code);
   const fixedCc=['ankit.chittora@onepws.com','process@onepws.com','jatin.chouhan@onepws.com'];
   const d=APP.depts.find(x=>x.code===code)||{code,name:code};
@@ -6147,14 +6155,14 @@ function setTrackerPage(p){APP.trackerPage=Math.max(1,p);renderTrackerBody();}
 function renderTrackerBody(){
   const tb=el('tr-body');if(!tb)return;const q=(APP.trackerSearch||'').toLowerCase();
   if(APP.trackerTab==='findings'){
-    let data=APP.currentUser?.role==='spoc'?filteredFindings().filter(f=>f.dept===APP.currentUser?.dept):(APP.currentUser?.role==='manager'?filteredFindings().filter(f=>managerDeptCodes().includes(f.dept)):filteredFindings());if(q)data=data.filter(f=>[f.ref,f.deptName,f.desc,f.clause].join(' ').toLowerCase().includes(q));
+    let data=APP.currentUser?.role==='spoc'?filteredFindings().filter(f=>findingMatchesDeptCode(f,APP.currentUser?.dept)):(APP.currentUser?.role==='manager'?filteredFindings().filter(f=>deptCodeInList(f.dept,managerDeptCodes())||deptCodeInList(f.deptName,managerDeptCodes())):filteredFindings());if(q)data=data.filter(f=>[f.ref,f.deptName,f.desc,f.clause].join(' ').toLowerCase().includes(q));
     const tpg=APP.trackerPage||1;const tps=APP.pageSize;const ttl=data.length;
     const tPages=Math.ceil(ttl/tps);if(tpg>tPages&&tPages>0)APP.trackerPage=tPages;
     const tPageData=data.slice(((APP.trackerPage||1)-1)*tps,(APP.trackerPage||1)*tps);
     data=tPageData;
     tb.innerHTML=`<div class="tw"><table><thead><tr><th>ID</th><th>Dept</th><th>Description</th><th>Severity</th><th>Clause</th><th>Due</th><th>Status</th><th>Action</th></tr></thead><tbody>${data.map(f=>`<tr><td class="pr">${f.ref}</td><td>${f.deptName}</td><td style="max-width:180px;">${f.desc}</td><td>${badge(SEV_BADGE[f.sev]||'b-gray',SEV_LABEL[f.sev]||f.sev)}</td><td>${badge('b-blue',f.clause)}</td><td style="color:${f.status==='delayed'?'var(--red)':'inherit'}">${f.due}</td><td>${badge(STAT_BADGE[f.status]||'b-gray',STAT_LABEL[f.status]||f.status)}</td><td><button class="btn btn-ghost btn-sm" onclick="openCapa(${attrJsArg(capaKey(f))})">Open</button></td></tr>`).join('')}</tbody></table></div>${renderPagination(ttl,APP.trackerPage||1,tps,'setTrackerPage')}<div class="txs td mt1">${ttl} record(s)</div>`;}
   if(APP.trackerTab==='capa'){
-    let data=filteredFindings().filter(f=>f.status!=='closed'&&(APP.currentUser?.role!=='spoc'||f.dept===APP.currentUser?.dept)&&(APP.currentUser?.role!=='manager'||managerDeptCodes().includes(f.dept)));if(q)data=data.filter(f=>[f.ref,f.deptName,f.desc].join(' ').toLowerCase().includes(q));
+    let data=filteredFindings().filter(f=>f.status!=='closed'&&(APP.currentUser?.role!=='spoc'||findingMatchesDeptCode(f,APP.currentUser?.dept))&&(APP.currentUser?.role!=='manager'||deptCodeInList(f.dept,managerDeptCodes())||deptCodeInList(f.deptName,managerDeptCodes())));if(q)data=data.filter(f=>[f.ref,f.deptName,f.desc].join(' ').toLowerCase().includes(q));
     const cpg=APP.trackerPage||1;const cps2=APP.pageSize;const ctl=data.length;
     data=data.slice((cpg-1)*cps2,cpg*cps2);
     tb.innerHTML=`<div class="tw"><table><thead><tr><th>Ref</th><th>Dept</th><th>Issue</th><th>Severity</th><th>Due</th><th>Days</th><th>Status</th><th>Action</th></tr></thead><tbody>${data.map(f=>{const dl=Math.round((new Date(f.due)-new Date())/86400000);return`<tr><td class="pr">${f.ref}</td><td>${f.deptName}</td><td style="max-width:160px;">${(f.desc||'').substring(0,55)}</td><td>${badge(SEV_BADGE[f.sev]||'b-gray',SEV_LABEL[f.sev]||f.sev)}</td><td>${f.due}</td><td style="color:${dl<0?'var(--red)':dl<=3?'var(--amber)':'inherit'};font-weight:${dl<0?800:400};">${dl<0?`${Math.abs(dl)}d over`:`${dl}d`}</td><td>${badge(STAT_BADGE[f.status]||'b-gray',STAT_LABEL[f.status]||f.status)}</td><td><button class="btn btn-ghost btn-sm" onclick="openCapa(${attrJsArg(capaKey(f))})">Open</button></td></tr>`;}).join('')}</tbody></table></div>${renderPagination(ctl,cpg,cps2,'setTrackerPage')}<div class="txs td mt1">${ctl} open CAPA(s)</div>`;}
@@ -6167,8 +6175,8 @@ function renderTrackerBody(){
 }
 function downloadTrackerExcel(){
   if(!window.XLSX){showToast('Excel loading...');return;}let data=[];
-  if(APP.trackerTab==='findings')data=(APP.currentUser?.role==='spoc'?APP.findings.filter(f=>f.dept===APP.currentUser?.dept):(APP.currentUser?.role==='manager'?APP.findings.filter(f=>managerDeptCodes().includes(f.dept)):APP.findings)).map(f=>({ID:f.ref,Dept:f.deptName,Desc:f.desc,Sev:SEV_LABEL[f.sev],Clause:f.clause,Due:f.due,Status:STAT_LABEL[f.status]}));
-  else if(APP.trackerTab==='capa')data=APP.findings.filter(f=>f.status!=='closed'&&(APP.currentUser?.role!=='spoc'||f.dept===APP.currentUser?.dept)&&(APP.currentUser?.role!=='manager'||managerDeptCodes().includes(f.dept))).map(f=>({Ref:f.ref,Dept:f.deptName,Issue:f.desc,Due:f.due,Status:STAT_LABEL[f.status]}));
+  if(APP.trackerTab==='findings')data=(APP.currentUser?.role==='spoc'?APP.findings.filter(f=>findingMatchesDeptCode(f,APP.currentUser?.dept)):(APP.currentUser?.role==='manager'?APP.findings.filter(f=>deptCodeInList(f.dept,managerDeptCodes())||deptCodeInList(f.deptName,managerDeptCodes())):APP.findings)).map(f=>({ID:f.ref,Dept:f.deptName,Desc:f.desc,Sev:SEV_LABEL[f.sev],Clause:f.clause,Due:f.due,Status:STAT_LABEL[f.status]}));
+  else if(APP.trackerTab==='capa')data=APP.findings.filter(f=>f.status!=='closed'&&(APP.currentUser?.role!=='spoc'||findingMatchesDeptCode(f,APP.currentUser?.dept))&&(APP.currentUser?.role!=='manager'||deptCodeInList(f.dept,managerDeptCodes())||deptCodeInList(f.deptName,managerDeptCodes()))).map(f=>({Ref:f.ref,Dept:f.deptName,Issue:f.desc,Due:f.due,Status:STAT_LABEL[f.status]}));
   else data=scopedLearnings().map(l=>({Title:l.title,Dept:l.dept||'All',Clause:l.clause,Sev:SEV_LABEL[l.sev],'Root Cause':l.rc,'Preventive Action':l.pa}));
   const ws=XLSX.utils.json_to_sheet(data);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,APP.trackerTab);
   XLSX.writeFile(wb,`OnePWS_${APP.trackerTab}_${Date.now()}.xlsx`);showToast('📊 Excel exported!');
@@ -6198,8 +6206,8 @@ function downloadTrackerPDF(){
   doc.setFillColor(192,57,43);doc.rect(0,0,pw,22,'F');doc.setTextColor(255,255,255);doc.setFontSize(12);doc.setFont('helvetica','bold');
   doc.text(`OnePWS Pvt. Ltd. — ${APP.trackerTab.toUpperCase()} Tracker`,pw/2,14,{align:'center'});
   doc.setTextColor(30,30,50);let rows=[],head=[];
-  if(APP.trackerTab==='findings'){head=[['ID','Dept','Description','Severity','Status']];rows=(APP.currentUser?.role==='spoc'?APP.findings.filter(f=>f.dept===APP.currentUser?.dept):(APP.currentUser?.role==='manager'?APP.findings.filter(f=>managerDeptCodes().includes(f.dept)):APP.findings)).map(f=>[f.ref,f.deptName,f.desc,SEV_LABEL[f.sev],STAT_LABEL[f.status]]);}
-  else if(APP.trackerTab==='capa'){head=[['Ref','Dept','Issue','Status','Due']];rows=APP.findings.filter(f=>f.status!=='closed'&&(APP.currentUser?.role!=='spoc'||f.dept===APP.currentUser?.dept)&&(APP.currentUser?.role!=='manager'||managerDeptCodes().includes(f.dept))).map(f=>[f.ref,f.deptName,f.desc,STAT_LABEL[f.status],f.due]);}
+  if(APP.trackerTab==='findings'){head=[['ID','Dept','Description','Severity','Status']];rows=(APP.currentUser?.role==='spoc'?APP.findings.filter(f=>findingMatchesDeptCode(f,APP.currentUser?.dept)):(APP.currentUser?.role==='manager'?APP.findings.filter(f=>deptCodeInList(f.dept,managerDeptCodes())||deptCodeInList(f.deptName,managerDeptCodes())):APP.findings)).map(f=>[f.ref,f.deptName,f.desc,SEV_LABEL[f.sev],STAT_LABEL[f.status]]);}
+  else if(APP.trackerTab==='capa'){head=[['Ref','Dept','Issue','Status','Due']];rows=APP.findings.filter(f=>f.status!=='closed'&&(APP.currentUser?.role!=='spoc'||findingMatchesDeptCode(f,APP.currentUser?.dept))&&(APP.currentUser?.role!=='manager'||deptCodeInList(f.dept,managerDeptCodes())||deptCodeInList(f.deptName,managerDeptCodes()))).map(f=>[f.ref,f.deptName,f.desc,STAT_LABEL[f.status],f.due]);}
   else{head=[['Title','Dept','Clause','Severity']];rows=scopedLearnings().map(l=>[l.title,l.dept||'All',l.clause,SEV_LABEL[l.sev]]);}
   doc.autoTable({startY:26,head,body:rows,styles:{fontSize:8},headStyles:{fillColor:[192,57,43],textColor:255},margin:{left:14,right:14}});
   doc.setFontSize(7);doc.setTextColor(150,150,150);doc.text(`OnePWS Pvt. Ltd. | ${new Date().toLocaleString()}`,pw/2,288,{align:'center'});
