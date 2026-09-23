@@ -999,7 +999,7 @@ function _completedAuditCompleteness(a){
   var score=a.auditScoreFrozen!==undefined?1:0;
   score+=Array.isArray(a.findingRefs)?a.findingRefs.length:0;
   score+=a.auditFindingCountsFrozen?Number(a.auditFindingCountsFrozen.total||0):0;
-  score+=a.session&&a.session.findings?Object.keys(a.session.findings).length:0;
+  score+=a.session&&a.session.findings?sessionAuditFindingRows(a.session,a).length:0;
   return score;
 }
 function _isBadDerivedCompletedAudit(a){
@@ -1325,11 +1325,7 @@ function _refreshAfterSync(k){
     ap_permissions:['adminpanel']
   };
   var pages=relevantPages[k]||[];
-  if(k==='ap_finds'&&typeof processOverdueFindings==='function'){
-    // Only mark findings as delayed (status update) — do NOT send emails from sync poll.
-    // Emails are sent only by the scheduled background check, not on every 15s poll.
-    processOverdueFindings({sendEmail:false,source:'sync'});
-  }
+  // Sync refreshes must stay render-only; background status/email jobs are scheduled separately.
   if(k==='ap_audit_drafts'&&typeof restoreCurrentAuditDraft==='function'){
     restoreCurrentAuditDraft();
     var rcv=el('rcv');if(rcv&&APP.session)rcv.classList.remove('hidden');
@@ -1652,17 +1648,17 @@ function initApiSync(){
         var shouldPushMerged=false;
         if(k==='ap_finds'){
           var mergedFindings=_mergeFindingsForSync(local,remote);
-          shouldPushMerged=JSON.stringify(mergedFindings)!==JSON.stringify(remote);
+          shouldPushMerged=hasLocal&&_syncValueHasData(local)&&JSON.stringify(mergedFindings)!==JSON.stringify(remote);
           remote=mergedFindings;
         }
         if(k==='ap_audit_drafts'){
           var mergedDrafts=_mergeAuditDraftsForSync(local,remote);
-          shouldPushMerged=JSON.stringify(mergedDrafts)!==JSON.stringify(remote);
+          shouldPushMerged=hasLocal&&_syncValueHasData(local)&&JSON.stringify(mergedDrafts)!==JSON.stringify(remote);
           remote=mergedDrafts;
         }
         if(k==='ap_completed_audits'){
           var mergedAudits=_mergeCompletedAuditsForSync(local,remote);
-          shouldPushMerged=JSON.stringify(mergedAudits)!==JSON.stringify(remote);
+          shouldPushMerged=hasLocal&&_syncValueHasData(local)&&JSON.stringify(mergedAudits)!==JSON.stringify(remote);
           remote=mergedAudits;
         }
         if(k==='ap_email_logs'){
@@ -1724,7 +1720,6 @@ function initApiSync(){
     }
     if(typeof repairCompletedAuditScores==='function')repairCompletedAuditScores();
     // Status update only on sync — email scheduler handles actual sending
-    if(typeof processOverdueFindings==='function')processOverdueFindings({sendEmail:false,source:'initial-sync'});
     if(typeof startEmailScheduler==='function')startEmailScheduler();
 
     if(updated){
@@ -1850,6 +1845,8 @@ var _emailSchedulerStarted=false;
 var _emailSchedulerTimer=null;
 function startEmailScheduler(){
   if(_emailSchedulerStarted)return;
+  var role=APP.currentUser&&APP.currentUser.role;
+  if(role!=='admin'&&role!=='auditor')return;
   _emailSchedulerStarted=true;
   function runGuardedAutoEmails(){
     if(!_apiReady||!APP.currentUser)return;
@@ -2428,6 +2425,7 @@ function auditScoreStatus(score){return score>=80?'Compliant':score>=60?'At Risk
 function auditFindingCounts(findings){
   var c=0,ma=0,mi=0,ob=0;
   (findings||[]).forEach(function(f){
+    if(!isRealAuditFinding(f))return;
     var sev=normalizeAuditSeverity(f&&((f.sev!==undefined?f.sev:f.severity)));
     if(sev==='critical')c++;
     else if(sev==='major')ma++;
@@ -2436,14 +2434,39 @@ function auditFindingCounts(findings){
   });
   return {critical:c,major:ma,minor:mi,obs:ob,total:c+ma+mi+ob};
 }
+function isRealAuditFinding(f){
+  if(!f||typeof f!=='object')return false;
+  if(f.deletedAt||String(f.status||'').toLowerCase()==='draft')return false;
+  return !!String(f.desc||f.description||f.ref||'').trim();
+}
+function sessionAuditFindingEntries(session,audit){
+  session=session||{};
+  var findings=(session.findings&&typeof session.findings==='object')?session.findings:{};
+  var answers=(session.answers&&typeof session.answers==='object')?session.answers:{};
+  var checkpointIds={};
+  ((audit&&audit.sections)||[]).forEach(function(section){
+    (section._checkpoints||[]).forEach(function(q){if(q&&q.id)checkpointIds[String(q.id)]=1;});
+  });
+  var hasCheckpointIds=Object.keys(checkpointIds).length>0;
+  return Object.entries(findings).filter(function(entry){
+    var qid=entry[0],finding=entry[1];
+    if(!isRealAuditFinding(finding))return false;
+    if(Object.prototype.hasOwnProperty.call(answers,qid))return answers[qid]==='no';
+    return !hasCheckpointIds||checkpointIds[String(qid)];
+  });
+}
+function sessionAuditFindingRows(session,audit){
+  return sessionAuditFindingEntries(session,audit).map(function(entry){return entry[1];});
+}
 function auditScoreFromSessionFindings(session){
-  return auditScore(Object.values((session&&session.findings)||{}));
+  return auditScore(sessionAuditFindingRows(session,null));
 }
 function completedAuditKey(audit){
   if(!audit)return '';
   var primary=audit.ref||audit.auditRef||audit.id||audit.auditId||'';
-  if(primary)return [audit.dept||'',primary].join('|').toLowerCase();
-  return [audit.dept||'',audit.submittedAt||audit.date||''].join('|').toLowerCase();
+  var dept=deptCodeForAudit(audit)||(audit.dept||'');
+  if(primary)return [dept,primary].join('|').toLowerCase();
+  return [dept,audit.submittedAt||audit.date||''].join('|').toLowerCase();
 }
 function derivedCompletedAuditsFromFindings(existing){
   if(typeof APP==='undefined'||!APP.findings)return [];
@@ -2452,7 +2475,8 @@ function derivedCompletedAuditsFromFindings(existing){
   var existingRefs=new Set((existing||[]).map(function(a){return String(a&&(a.ref||a.auditRef||a.id)||'').trim().toLowerCase();}).filter(Boolean));
   var groups={};
   (APP.findings||[]).forEach(function(f){
-    if(!f||!f.dept)return;
+    if(!f||(!f.dept&&!f.deptName))return;
+    var deptCode=deptCodeForFinding(f);
     var auditRef=String(f.auditRef||f.auditId||'').trim();
     // Skip if the auditRef already exists as a completed audit — no need to derive
     if(auditRef&&existingRefs.has(auditRef.toLowerCase()))return;
@@ -2461,12 +2485,12 @@ function derivedCompletedAuditsFromFindings(existing){
     var day=d?d.toISOString().slice(0,10):String(date||'').slice(0,10);
     // Use a stable fallback key (never Date.now()) to avoid generating new entries on each call
     var stableDay=day||'nodate';
-    var key=f.dept+'|'+(auditRef||('findings-'+stableDay));
+    var key=deptCode+'|'+(auditRef||('findings-'+stableDay));
     if(!groups[key]){
-      var dept=APP.depts.find(function(x){return x.code===f.dept;})||{code:f.dept,name:f.dept};
+      var dept=deptRecordForValue(deptCode)||{code:deptCode,name:f.deptName||deptCode};
       // Only use stable AUTO ref — never timestamp-based to avoid duplicates
-      var autoRef=auditRef||('AUTO-'+f.dept+'-'+stableDay);
-      groups[key]={dept:f.dept,deptName:f.deptName||dept.name,ref:autoRef,submittedAt:date||'',date:date||'',rows:[]};
+      var autoRef=auditRef||('AUTO-'+dept.code+'-'+stableDay);
+      groups[key]={dept:dept.code,deptName:f.deptName||dept.name,ref:autoRef,submittedAt:date||'',date:date||'',rows:[]};
     }
     groups[key].rows.push(f);
   });
@@ -2487,7 +2511,7 @@ function normalizeCompletedAuditsData(data){
     if(audit!==raw)changed=true;
     var updates={};
     var rows=typeof auditFindingRows==='function'?auditFindingRows(audit):[];
-    var sessionRows=audit.session&&audit.session.findings?Object.values(audit.session.findings):[];
+    var sessionRows=audit.session&&audit.session.findings?sessionAuditFindingRows(audit.session,audit):[];
     var scoreRows=rows.length?rows:sessionRows;
     if(scoreRows.length){
       var fixedScore=auditScore(scoreRows);
@@ -2519,11 +2543,28 @@ function repairCompletedAuditScores(){
   }
   return false;
 }
-function completedAuditsSorted(deptCode){
-  var normalized=normalizeCompletedAuditsData(LS.get('ap_completed_audits',[])||[]).value;
+var _completedAuditsSortedCache={raw:'',findingsRaw:'',deptsRaw:'',rows:null};
+function allCompletedAuditsSorted(){
+  var raw='',findingsRaw='',deptsRaw='';
+  try{raw=localStorage.getItem('ap_completed_audits')||'[]';}catch(e){}
+  try{findingsRaw=localStorage.getItem('ap_finds')||'[]';}catch(e){}
+  try{deptsRaw=localStorage.getItem('ap_depts')||'[]';}catch(e){}
+  if(_completedAuditsSortedCache.rows&&_completedAuditsSortedCache.raw===raw&&_completedAuditsSortedCache.findingsRaw===findingsRaw&&_completedAuditsSortedCache.deptsRaw===deptsRaw){
+    return _completedAuditsSortedCache.rows.slice();
+  }
+  var audits=[];
+  try{audits=JSON.parse(raw||'[]')||[];}catch(e){audits=[];}
+  var normalized=normalizeCompletedAuditsData(audits).value;
   var derived=derivedCompletedAuditsFromFindings(normalized);
-  return normalized.concat(derived).filter(function(a){return (!deptCode||a.dept===deptCode)&&(!a.status||a.status==='submitted');}).slice().sort(function(a,b){
+  var rows=normalized.concat(derived).filter(function(a){return !a.status||a.status==='submitted';}).slice().sort(function(a,b){
     return new Date(a.submittedAt||a.date||0)-new Date(b.submittedAt||b.date||0);
+  });
+  _completedAuditsSortedCache={raw:raw,findingsRaw:findingsRaw,deptsRaw:deptsRaw,rows:rows};
+  return rows.slice();
+}
+function completedAuditsSorted(deptCode){
+  return allCompletedAuditsSorted().filter(function(a){
+    return auditMatchesDeptCode(a,deptCode);
   });
 }
 function frozenAuditScore(audit){
@@ -2531,7 +2572,7 @@ function frozenAuditScore(audit){
   var frozen=Number(audit.auditScoreFrozen);
   if(Number.isFinite(frozen))return Math.min(100,Math.max(0,Math.round(frozen)));
   if(audit.auditFindingCountsFrozen)return scoreFromFindingCounts(audit.auditFindingCountsFrozen);
-  if(audit.session&&audit.session.findings)return auditScoreFromSessionFindings(audit.session);
+  if(audit.session&&audit.session.findings)return auditScore(sessionAuditFindingRows(audit.session,audit));
   if(typeof auditFindingRows==='function'){
     var rows=auditFindingRows(audit);
     if(rows.length)return auditScore(rows);
@@ -2643,13 +2684,40 @@ function auditScoreTitle(scoreInfo){
   if(dt)title+=' · '+dt;
   return title;
 }
+var _auditFindingIndexCache={raw:'',index:null};
+function auditFindingIndex(){
+  var raw='';
+  try{raw=localStorage.getItem('ap_finds')||'[]';}catch(e){}
+  if(_auditFindingIndexCache.index&&_auditFindingIndexCache.raw===raw)return _auditFindingIndexCache.index;
+  var rows=APP.findings||[];
+  var index={byRef:{},byAudit:{}};
+  rows.forEach(function(f){
+    if(!f)return;
+    var ref=String(f.ref||'').trim();
+    if(ref)index.byRef[ref]=f;
+    [f.auditId,f.auditRef].forEach(function(v){
+      var key=String(v||'').trim();
+      if(!key)return;
+      (index.byAudit[key]=index.byAudit[key]||[]).push(f);
+    });
+  });
+  _auditFindingIndexCache={raw:raw,index:index};
+  return index;
+}
 function registerFindingsForAudit(audit){
   if(!audit)return [];
   var auditKeys=new Set([audit.id,audit.ref].filter(Boolean).map(String));
   var refs=new Set((audit.findingRefs||[]).map(String));
-  return (APP.findings||[]).filter(function(f){
-    if(!f||!findingMatchesDeptCode(f,audit.dept))return false;
-    return refs.has(String(f.ref||''))||auditKeys.has(String(f.auditId||''))||auditKeys.has(String(f.auditRef||''));
+  var idx=auditFindingIndex(),seen={},rows=[];
+  refs.forEach(function(ref){var f=idx.byRef[ref];if(f&&!seen[ref]){seen[ref]=1;rows.push(f);}});
+  auditKeys.forEach(function(key){
+    (idx.byAudit[key]||[]).forEach(function(f){
+      var id=String(f.id||f.ref||key+'|'+rows.length);
+      if(!seen[id]){seen[id]=1;rows.push(f);}
+    });
+  });
+  return rows.filter(function(f){
+    return f&&auditMatchesDeptCode(audit,deptCodeForFinding(f));
   });
 }
 function auditFindingRows(audit){
@@ -2657,7 +2725,7 @@ function auditFindingRows(audit){
   var registerRows=registerFindingsForAudit(audit);
   var byRef={};registerRows.forEach(function(f){if(f.ref)byRef[f.ref]=f;});
   var refs=audit.findingRefs||[];
-  var sessionFindings=audit.session&&audit.session.findings?Object.entries(audit.session.findings):[];
+  var sessionFindings=audit.session&&audit.session.findings?sessionAuditFindingEntries(audit.session,audit):[];
   var cps=(audit.sections||[]).flatMap(function(s){return s._checkpoints||[];});
   if(sessionFindings.length){
     return sessionFindings.map(function(entry,idx){
@@ -2927,8 +2995,7 @@ function initApp(){
   ensureRoleDefaults();
   repairFindingsStore();
   repairCompletedAuditScores();
-  // Check for overdue findings on startup (status update only — no email on page load/navigation)
-  if(typeof processOverdueFindings==='function')setTimeout(function(){processOverdueFindings({sendEmail:false,source:'startup'});},1800);
+  // Page startup is render-only; delayed status/email jobs are guarded by the scheduler.
   el('uname').textContent=u.name;
   el('urole').textContent=ROLE_LABELS[u.role]||u.role;
   const av=el('uav');
@@ -3152,7 +3219,8 @@ function todayLocalDate(){
 function deptToken(value){
   return String(value||'').trim()
     .replace(/\([^)]*\)/g,' ')
-    .replace(/&/g,' and ')
+    .replace(/&/g,' ')
+    .replace(/\band\b/ig,' ')
     .replace(/[^A-Za-z0-9]+/g,' ')
     .trim()
     .toLowerCase()
@@ -3174,7 +3242,7 @@ function deptRecordForValue(value){
 }
 function deptValuesMatch(a,b){
   var da=deptRecordForValue(a),db=deptRecordForValue(b);
-  if(da&&db)return da.code===db.code;
+  if(da&&db)return da.code===db.code||deptToken(da.name)===deptToken(db.name);
   if(da)return String(da.code||'').toUpperCase()===String(b||'').trim().toUpperCase()||deptToken(da.name)===deptToken(b);
   if(db)return String(db.code||'').toUpperCase()===String(a||'').trim().toUpperCase()||deptToken(db.name)===deptToken(a);
   return deptToken(a)&&deptToken(a)===deptToken(b);
@@ -3199,6 +3267,16 @@ function findingMatchesDeptCode(f,code){
   if(d)return findingMatchesDept(f,d);
   return deptValuesMatch(f&&f.dept,code)||deptValuesMatch(f&&f.deptName,code);
 }
+function auditMatchesDeptCode(audit,code){
+  if(!code)return true;
+  return deptValuesMatch(audit&&audit.dept,code)
+    || deptValuesMatch(audit&&audit.deptName,code)
+    || deptValuesMatch(audit&&audit.department,code);
+}
+function deptCodeForAudit(audit){
+  var d=deptRecordForValue(audit&&audit.dept)||deptRecordForValue(audit&&audit.deptName)||deptRecordForValue(audit&&audit.department);
+  return d?d.code:String((audit&&audit.dept)||(audit&&audit.deptName)||(audit&&audit.department)||'').trim();
+}
 function deptCodeInList(value,codes){
   return (codes||[]).some(function(code){return deptValuesMatch(value,code);});
 }
@@ -3206,13 +3284,46 @@ function isFindingPastDue(f){
   var due=localDateOnly(f&&f.due);
   return !!(due&&due<todayLocalDate());
 }
+function isFindingDueOrPast(f){
+  var due=localDateOnly(f&&f.due);
+  return !!(due&&due<=todayLocalDate());
+}
+function defaultEmailEscalationTiers(){
+  return [
+    {label:'Delayed NC Notification',min:0,max:6,frequencyDays:1,to:['spoc'],cc:['manager','hod','auditor','master_admin'],sendDays:[0,3,6]},
+    {label:'Escalation Tier 2',min:7,max:14,frequencyDays:2,to:['hod'],cc:['spoc','auditor','master_admin']},
+    {label:'Escalation Tier 3',min:15,max:9999,frequencyDays:30,to:['management'],cc:['hod','spoc','auditor','master_admin']}
+  ];
+}
+function defaultEscalationTierForDelay(days){
+  return defaultEmailEscalationTiers().find(function(x){return days>=x.min&&days<=x.max;})||null;
+}
+function isDelayedNotificationSendDay(days){
+  return [0,3,6].indexOf(Number(days))>-1;
+}
+function isFindingEmailActionable(f){
+  if(!f)return false;
+  var ws=typeof findingWorkflowStatus==='function'?findingWorkflowStatus(f):String(f.status||'').toLowerCase();
+  var status=String(f.status||'').toLowerCase();
+  var capaStatus=String(f.capaStatus||'').toLowerCase();
+  return status!=='closed'&&status!=='pending-closure'&&capaStatus!=='closed'&&capaStatus!=='submitted'&&ws!=='closed'&&ws!=='pending-closure';
+}
 function escalationTierForDelay(days){
   var matrix=APP.escalationMatrix||[];
-  return matrix.find(function(x){return days>=x.min&&days<=x.max;})
-    ||(days>0&&days<7?{label:'Delayed NC Notification',min:1,max:6,frequencyDays:3,to:['spoc'],cc:[]}:null);
+  var defaultTier=defaultEscalationTierForDelay(days);
+  var configured=matrix.find(function(x){return days>=x.min&&days<=x.max;});
+  if(!defaultTier)return configured||null;
+  if(defaultTier.min<7)return Object.assign({},configured||{},defaultTier);
+  return Object.assign({},defaultTier,configured||{},{
+    frequencyDays:defaultTier.frequencyDays,
+    to:(configured&&configured.to&&configured.to.length)?configured.to:defaultTier.to,
+    cc:[...new Set([].concat((configured&&configured.cc)||[],defaultTier.cc))]
+  });
 }
 function emailLockKeyForFinding(f,tier,type){
-  return [type||'delayed',deptCodeForFinding(f),tier&&tier.label||'',f&&String(f.ref||f.id||'')].join('|');
+  var parts=[type||'delayed',deptCodeForFinding(f),tier&&tier.label||'',f&&String(f.ref||f.id||'')];
+  if(type==='upcoming_reminder')parts.push(String((f&&f.due)||''));
+  return parts.join('|');
 }
 function emailLockItemsForRows(rows,tier,type){
   return (rows||[]).map(function(f){
@@ -3252,38 +3363,46 @@ function processOverdueFindings(opts){
     if(!f||typeof f!=='object')return f;
     var status=String(f.status||'open').toLowerCase();
     var capaStatus=String(f.capaStatus||'').toLowerCase();
-    if(status==='closed'||!isFindingPastDue(f))return f;
+    if(status==='closed'||!isFindingDueOrPast(f))return f;
     if(status==='pending-closure'||capaStatus==='submitted'||findingWorkflowStatus(f)==='pending-closure'||_hasUnreviewedClosureSubmission(f))return f;
     var item=Object.assign({},f);
     item.activityLog=compactAutoDelayActivityLog(item.activityLog);
     var hasAutoDelayLog=item.activityLog.some(_isAutoDelayActivity);
-    if(status!=='delayed'){
-      item.previousStatusBeforeDelay=f.status||'open';
-      item.status='delayed';
-      item.capaStatus='delayed';
-      item.delayedAt=item.delayedAt||nowIso;
-      if(!hasAutoDelayLog){
-        item.activityLog.push({user:'System',action:'Auto status changed to Delayed (due date missed)',ts:stamp});
+    // Status only flips to Delayed once the due date is actually missed (due < today).
+    // On the due date itself (delay day 0) the finding keeps its status but is still
+    // eligible for the day-0 Delayed NC Notification below.
+    if(isFindingPastDue(f)){
+      if(status!=='delayed'){
+        item.previousStatusBeforeDelay=f.status||'open';
+        item.status='delayed';
+        item.capaStatus='delayed';
+        item.delayedAt=item.delayedAt||nowIso;
+        if(!hasAutoDelayLog){
+          item.activityLog.push({user:'System',action:'Auto status changed to Delayed (due date missed)',ts:stamp});
+        }
+        updated++;
+        changed=true;
+      }else if(item.capaStatus!=='delayed'){
+        item.capaStatus='delayed';
+        changed=true;
+      }else if(item.activityLog!==f.activityLog){
+        changed=true;
       }
-      updated++;
-      changed=true;
-    }else if(item.capaStatus!=='delayed'){
-      item.capaStatus='delayed';
-      changed=true;
     }else if(item.activityLog!==f.activityLog){
       changed=true;
     }
     // ── Per-tier frequency enforcement ──
     // Each tier tracks its own last-sent timestamp independently:
-    //   Tier 1 (3-6d)  → every 3 days
-    //   Tier 2 (7-14d) → every 2 days  (escalation to HOD)
-    //   Tier 3 (15+d)  → every 30 days (escalation to MD)
+    //   Delayed NC (0-6d) → send on delay days 0, 3, 6 only (day 0 = target due date)
+    //   Tier 2 (7-14d)    → every 2 days  (escalation to HOD)
+    //   Tier 3 (15+d)     → every 30 days (escalation to MD)
     if(allowEmailSend&&typeof sendTemplateEmail==='function'){
       var fDays=delayDays(item);
       var fTier=escalationTierForDelay(fDays);
       if(!fTier)return item;
       if(opts.mode==='delayed'&&fTier.min>=7)return item;
       if(opts.mode==='escalation'&&fTier.min<7)return item;
+      if(fTier.min<7&&!isDelayedNotificationSendDay(fDays))return item;
       var fFreqMs=(fTier.frequencyDays||3)*24*60*60*1000;
       var fTierLabel=fTier.label;
       // autoEmailTierLastSentAt is a map: { tierLabel: isoTimestamp }
@@ -4484,11 +4603,25 @@ function reportFindingsForDept(code){
   return rows.map(function(f){var sev=normalizeAuditSeverity(f.sev||f.severity);return Object.assign({},f,{sev:sev,severity:sev});});
 }
 function reportDeptList(){
-  var depts=APP.currentUser?.role==='spoc'?APP.depts.filter(d=>d.code===APP.currentUser?.dept):(APP.reportDeptFilter&&APP.reportDeptFilter!=='all'?APP.depts.filter(d=>d.code===APP.reportDeptFilter):APP.depts);
+  var depts=APP.currentUser?.role==='spoc'?APP.depts.filter(d=>deptValuesMatch(d.code,APP.currentUser?.dept)||deptValuesMatch(d.name,APP.currentUser?.dept)):(APP.reportDeptFilter&&APP.reportDeptFilter!=='all'?APP.depts.filter(d=>deptValuesMatch(d.code,APP.reportDeptFilter)||deptValuesMatch(d.name,APP.reportDeptFilter)):APP.depts);
+  var audits=[];
   if((APP.reportStatusFilter||'completed')==='completed'){
-    const done=new Set(completedAuditsSorted().map(a=>a.dept));
-    depts=depts.filter(d=>done.has(d.code));
+    audits=completedAuditsSorted();
+    depts=depts.filter(d=>audits.some(a=>auditMatchesDeptCode(a,d.code)));
   }
+  var byAlias={};
+  depts.forEach(function(d){
+    var key=deptToken(d.name)||deptToken(d.code);
+    var prev=byAlias[key];
+    if(!prev){byAlias[key]=d;return;}
+    var want=String((APP.currentUser&&APP.currentUser.dept)||APP.reportDeptFilter||'').toUpperCase();
+    var dExact=String(d.code||'').toUpperCase()===want;
+    var pExact=String(prev.code||'').toUpperCase()===want;
+    var dAudited=audits.some(a=>String(a.dept||'').toUpperCase()===String(d.code||'').toUpperCase());
+    var pAudited=audits.some(a=>String(a.dept||'').toUpperCase()===String(prev.code||'').toUpperCase());
+    if((dExact&&!pExact)||(dAudited&&!pAudited))byAlias[key]=d;
+  });
+  depts=Object.keys(byAlias).map(function(k){return byAlias[k];});
   return depts;
 }
 function setReportStatusFilter(status){
@@ -4520,7 +4653,7 @@ function renderReports(){
   <div class="ch sg"><span class="dot" style="background:var(--accent)"></span>Department-wise Reports</div>
   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
     ${APP.currentUser?.role==="spoc"?"":`<div class="badge ${APP.reportDeptFilter==='all'?'b-brand':'b-gray'}" id="rpt-btn-all" style="cursor:pointer;padding:5px 10px;font-size:11px;" onclick="filterReportDept('all')">All Depts</div>`}
-    ${(APP.currentUser?.role==="spoc"?APP.depts.filter(d=>d.code===APP.currentUser?.dept):APP.depts).map(d=>`<div class="badge ${APP.reportDeptFilter===d.code?'b-brand':'b-gray'} rpt-dept-btn" id="rpt-btn-${d.code}" style="cursor:pointer;padding:5px 10px;font-size:11px;" onclick="filterReportDept('${d.code}')">${d.code}</div>`).join('')}
+    ${(APP.currentUser?.role==="spoc"?APP.depts.filter(d=>deptValuesMatch(d.code,APP.currentUser?.dept)||deptValuesMatch(d.name,APP.currentUser?.dept)):APP.depts).map(d=>`<div class="badge ${deptValuesMatch(APP.reportDeptFilter,d.code)?'b-brand':'b-gray'} rpt-dept-btn" id="rpt-btn-${d.code}" style="cursor:pointer;padding:5px 10px;font-size:11px;" onclick="filterReportDept('${d.code}')">${d.code}</div>`).join('')}
   </div>
   <div class="grid g3 sg" id="report-cards">${genReportCards(visibleDepts)}</div>
   <div id="report-preview" class="hidden"></div>`;
@@ -4593,7 +4726,7 @@ function showDeptReport(code){
     return '<div class="txs td mb2">Latest audit: '+(latest.ref||'')+' · '+(latest.auditor||'')+' · '+(latest.submittedAt?new Date(latest.submittedAt).toLocaleDateString():'')+'</div>'+
     '<div class="tw mb3"><table><thead><tr><th>#</th><th>Clause</th><th>Question</th><th>Result</th><th>Observation</th></tr></thead><tbody>'+
     allQ.map(function(q,i){
-      var ans=sess.answers?sess.answers[q.id]:'';var finding=sess.findings?sess.findings[q.id]:null;var note=sess.notes?sess.notes[q.id]||'':'';
+      var ans=sess.answers?sess.answers[q.id]:'';var finding=sess.findings&&ans==='no'&&isRealAuditFinding(sess.findings[q.id])?sess.findings[q.id]:null;var note=sess.notes?sess.notes[q.id]||'':'';
       var color=ans==='yes'?'green':ans==='no'?'red':ans==='na'?'text3':'amber';
       var label=ans==='yes'?'✅ Compliant':ans==='no'?'❌ Non-Compliant':ans==='na'?'N/A':'⏭ Skipped';
       return '<tr style="background:'+(ans==='no'?'var(--red-bg)':ans==='yes'?'var(--green-bg)':'inherit')+';"><td>'+(i+1)+'</td><td>'+badge('b-blue',q.clause||'—')+'</td><td style="max-width:280px;">'+q.text+'</td><td><span style="color:var(--'+color+');font-weight:700;">'+label+'</span></td><td style="font-size:11px;">'+((finding?'⚠ '+finding.desc+' ':'')+note)+'</td></tr>';
@@ -4685,7 +4818,7 @@ function genDeptPDF(code){
       doc.text('Audit Checklist Results ('+allQ.length+' questions)',14,nextY+4);
       var chkRows=allQ.map(function(q,i){
         var ans=sess.answers?sess.answers[q.id]:'';
-        var finding=sess.findings?sess.findings[q.id]:null;
+        var finding=sess.findings&&ans==='no'&&isRealAuditFinding(sess.findings[q.id])?sess.findings[q.id]:null;
         var note=sess.notes?sess.notes[q.id]||'':'';
         return[String(i+1),q.clause||'',q.text||'',ans==='yes'?'Compliant':ans==='no'?'Non-Compliant':ans==='na'?'N/A':'Skipped',(finding?finding.desc+' ':'')+note];
       });
@@ -5570,7 +5703,7 @@ function emailTpl(type){return (APP.emailTemplates||[]).find(t=>t.type===type&&t
 function renderEmailMaster(canEdit){
   const q=(APP.emailSearch||'').toLowerCase();
   const rows=(APP.emailMaster||[]).filter(r=>!q||[r.spocName,r.email,r.department,r.deptCode,r.reportingName,r.reportingEmail,r.hodEmail,r.managementEmail].join(' ').toLowerCase().includes(q));
-  return `<div class="grid g21 sg"><div class="card"><div class="fb mb2"><div class="ch" style="margin:0"><span class="dot" style="background:var(--brand)"></span>Email Master (${rows.length})</div><div class="flex g2u">${canEdit?`<button class="btn btn-ghost btn-sm" onclick="downloadEmailSample()">Download Template</button><button class="btn btn-primary btn-sm" onclick="el('em-import')?.click()">Import</button>`:''}<input type="file" id="em-import" accept=".csv,.xlsx" style="display:none" onchange="importEmailMaster(event)"></div></div><div class="mb2"><input placeholder="Search SPOC, department or email..." value="${sanitize(APP.emailSearch||'')}" oninput="APP.emailSearch=this.value;renderMdBody()"></div><div class="tw"><table><thead><tr><th>SPOC</th><th>Email</th><th>Department</th><th>Manager</th><th>HOD/BUH</th><th>Management</th><th>Status</th>${canEdit?'<th>Actions</th>':''}</tr></thead><tbody>${rows.map(r=>`<tr><td class="pr">${sanitize(r.spocName)}</td><td>${sanitize(r.email)}</td><td>${sanitize(r.department||r.deptCode)}</td><td>${sanitize(r.reportingName)}<div class="txx td">${sanitize(r.reportingEmail)}</div></td><td>${sanitize(r.hodEmail||'-')}</td><td>${sanitize(r.managementEmail||'-')}</td><td>${badge(r.status==='active'?'b-green':'b-gray',r.status==='active'?'Active':'Inactive')}</td>${canEdit?`<td class="flex g1u"><button class="btn ${APP.editEmailRecord&&APP.editEmailRecord.id===r.id?'btn-primary':'btn-ghost'} btn-sm" onclick="editEmailMaster('${sanitize(r.id)}')">Edit</button><button class="btn btn-danger btn-sm" onclick="deleteEmailMaster('${sanitize(r.id)}')">Delete</button></td>`:''}</tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:12px;">No email records</td></tr>'}</tbody></table></div></div><div class="card" id="email-master-form-card"><div class="ch"><span class="dot" style="background:var(--teal)"></span>${canEdit?(APP.editEmailRecord?'Edit Email Record':'Add Email Record'):'Scheduler'}</div>${canEdit?emailMasterForm():''}<div class="mt3" style="border-top:1px solid var(--border);padding-top:12px;"><div class="ch"><span class="dot" style="background:var(--amber)"></span>Automation Runs</div><div class="flex g2u fw"><button class="btn btn-ghost btn-sm" onclick="runEmailScheduler('upcoming')">Upcoming 5 Days</button><button class="btn btn-ghost btn-sm" onclick="runEmailScheduler('delayed')">Delayed NCs</button><button class="btn btn-brand btn-sm" onclick="runEmailScheduler('escalation')">Weekly Escalation</button></div><div class="txs td mt2">Summary emails are grouped by department and observations are excluded.</div></div></div></div>`;
+  return `<div class="grid g21 sg"><div class="card"><div class="fb mb2"><div class="ch" style="margin:0"><span class="dot" style="background:var(--brand)"></span>Email Master (${rows.length})</div><div class="flex g2u">${canEdit?`<button class="btn btn-ghost btn-sm" onclick="downloadEmailSample()">Download Template</button><button class="btn btn-primary btn-sm" onclick="el('em-import')?.click()">Import</button>`:''}<input type="file" id="em-import" accept=".csv,.xlsx" style="display:none" onchange="importEmailMaster(event)"></div></div><div class="mb2"><input placeholder="Search SPOC, department or email..." value="${sanitize(APP.emailSearch||'')}" oninput="APP.emailSearch=this.value;renderMdBody()"></div><div class="tw"><table><thead><tr><th>SPOC</th><th>Email</th><th>Department</th><th>Manager</th><th>HOD/BUH</th><th>Management</th><th>Status</th>${canEdit?'<th>Actions</th>':''}</tr></thead><tbody>${rows.map(r=>`<tr><td class="pr">${sanitize(r.spocName)}</td><td>${sanitize(r.email)}</td><td>${sanitize(r.department||r.deptCode)}</td><td>${sanitize(r.reportingName)}<div class="txx td">${sanitize(r.reportingEmail)}</div></td><td>${sanitize(r.hodEmail||'-')}</td><td>${sanitize(r.managementEmail||'-')}</td><td>${badge(r.status==='active'?'b-green':'b-gray',r.status==='active'?'Active':'Inactive')}</td>${canEdit?`<td class="flex g1u"><button class="btn ${APP.editEmailRecord&&APP.editEmailRecord.id===r.id?'btn-primary':'btn-ghost'} btn-sm" onclick="editEmailMaster('${sanitize(r.id)}')">Edit</button><button class="btn btn-danger btn-sm" onclick="deleteEmailMaster('${sanitize(r.id)}')">Delete</button></td>`:''}</tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:12px;">No email records</td></tr>'}</tbody></table></div></div><div class="card" id="email-master-form-card"><div class="ch"><span class="dot" style="background:var(--teal)"></span>${canEdit?(APP.editEmailRecord?'Edit Email Record':'Add Email Record'):'Scheduler'}</div>${canEdit?emailMasterForm():''}<div class="mt3" style="border-top:1px solid var(--border);padding-top:12px;"><div class="ch"><span class="dot" style="background:var(--amber)"></span>Automation Runs</div><div class="flex g2u fw"><button class="btn btn-ghost btn-sm" onclick="runEmailScheduler('upcoming')">Upcoming 0-2 Days</button><button class="btn btn-ghost btn-sm" onclick="runEmailScheduler('delayed')">Delayed NCs</button><button class="btn btn-brand btn-sm" onclick="runEmailScheduler('escalation')">Escalation Tiers</button></div><div class="txs td mt2">Summary emails are grouped by department and observations are excluded.</div></div></div></div>`;
 }
 function emailMasterForm(r){
   r=r||APP.editEmailRecord||{};
@@ -5680,39 +5813,53 @@ function daysUntilDue(f){
   if(!d)return null;
   return Math.ceil((d-todayLocalDate())/86400000);
 }
-function recipientsForDept(deptCode,mode,delay){
+function emailsForRecipientKey(key,deptCode){
+  key=String(key||'').toLowerCase().replace(/[\s-]+/g,'_');
+  if(key==='spoc')return spocEmails(deptCode);
+  if(key==='manager'||key==='reporting')return deptManagerEmails(deptCode);
+  if(key==='hod'||key==='buh')return deptHodEmails(deptCode);
+  if(key==='management'||key==='md')return deptManagementEmails(deptCode);
+  if(key==='auditor')return deptAuditorEmails(deptCode);
+  if(key==='master_admin'||key==='admin')return masterAdminEmails();
+  return splitEmailList(key);
+}
+function uniqueEmailList(list){
+  var seen={};
+  return (list||[]).flatMap(splitEmailList).filter(function(email){
+    var key=String(email||'').toLowerCase();
+    if(!key||seen[key])return false;
+    seen[key]=true;
+    return true;
+  });
+}
+function recipientsForDept(deptCode,mode,delay,tier){
   const r=deptEmailRecord(deptCode);
   let to=spocEmails(deptCode),cc=[];
-  if(mode==='audit'||mode==='upcoming'){cc=deptManagerEmails(deptCode).concat(deptHodEmails(deptCode),managementEmails().slice(0,1));}
+  if(mode==='audit'){cc=deptManagerEmails(deptCode).concat(deptHodEmails(deptCode),managementEmails().slice(0,1));}
+  if(mode==='upcoming'){cc=deptManagerEmails(deptCode).concat(deptHodEmails(deptCode),deptAuditorEmails(deptCode),masterAdminEmails());}
   if(mode==='delayed'){
-    // Tier 1 (3-6 days): email to SPOC only (no CC escalation)
     to=spocEmails(deptCode);
-    cc=[];
+    cc=deptManagerEmails(deptCode).concat(deptHodEmails(deptCode),deptAuditorEmails(deptCode),masterAdminEmails());
   }
   if(mode==='escalation'){
-    // Determine tier from escalation matrix
     const matrix=APP.escalationMatrix||[];
-    const m=matrix.find(x=>delay>=x.min&&delay<=x.max)||matrix[0]||{to:['spoc'],cc:[],frequencyDays:3,label:'Default'};
+    const m=tier||matrix.find(x=>delay>=x.min&&delay<=x.max)||defaultEscalationTierForDelay(delay)||matrix[0]||{to:['spoc'],cc:['auditor','master_admin'],frequencyDays:3,label:'Default'};
     to=[];
     cc=[];
-    (m.to||[]).forEach(k=>{
-      if(k==='spoc')to=to.concat(spocEmails(deptCode));
-      if(k==='manager')to=to.concat(deptManagerEmails(deptCode));
-      if(k==='hod')to=to.concat(deptHodEmails(deptCode));
-      if(k==='management')to=to.concat(deptManagementEmails(deptCode));
-    });
-    (m.cc||[]).forEach(k=>{
-      if(k==='spoc')cc=cc.concat(spocEmails(deptCode));
-      if(k==='manager')cc=cc.concat(deptManagerEmails(deptCode));
-      if(k==='hod')cc=cc.concat(deptHodEmails(deptCode));
-      if(k==='management')cc=cc.concat(deptManagementEmails(deptCode));
-    });
-    // Fallback: if no TO resolved, default to SPOC
+    (m.to||[]).forEach(k=>{to=to.concat(emailsForRecipientKey(k,deptCode));});
+    (m.cc||[]).forEach(k=>{cc=cc.concat(emailsForRecipientKey(k,deptCode));});
+    if(delay>=7&&delay<=14){
+      if(!to.length)to=deptHodEmails(deptCode);
+      cc=cc.concat(spocEmails(deptCode),deptAuditorEmails(deptCode),masterAdminEmails());
+    }else if(delay>=15){
+      if(!to.length)to=deptManagementEmails(deptCode);
+      cc=cc.concat(deptHodEmails(deptCode),spocEmails(deptCode),deptAuditorEmails(deptCode),masterAdminEmails());
+    }
     if(!to.length)to=spocEmails(deptCode);
   }
   // Department Manager and HOD/BUH (from Email Master) are always CC'd on automatic emails.
   cc=cc.concat(deptManagerEmails(deptCode),deptHodEmails(deptCode));
-  return {to:[...new Set(to.filter(Boolean))],cc:[...new Set(cc.filter(Boolean))],spocName:r.spocName||'Team'};
+  return {to:uniqueEmailList(to),cc:uniqueEmailList(cc),spocName:r.spocName||'Team'};
 }
 function sendTemplateEmail(type,deptCode,rows,extra){
   const d=deptRecordForValue(deptCode)||{code:deptCode,name:deptCode};
@@ -5721,7 +5868,7 @@ function sendTemplateEmail(type,deptCode,rows,extra){
   // For escalation emails with a known tier from processOverdueFindings, use it; else compute from matrix
   let effectiveMode=type;
   if(type==='delayed'&&extra&&extra._tier&&extra._tier.min>=7)effectiveMode='escalation';
-  const rec=recipientsForDept(deptCode,effectiveMode,maxDelay);
+  const rec=recipientsForDept(deptCode,effectiveMode,maxDelay,extra&&extra._tier);
   const first=rows&&rows[0]||{};
   const vars=Object.assign({
     department_name:d.name,
@@ -5733,7 +5880,7 @@ function sendTemplateEmail(type,deptCode,rows,extra){
     clause_name:clauseName(first.clause),
     clause_description:clauseDescription(first.clause),
     nc_table:ncTable(rows),
-    window_days:5,
+    window_days:2,
     escalation_level:extra&&extra.escalation_level||'',
     audit_name:extra&&extra.audit_name||'',
     submitted_at:new Date().toLocaleString()
@@ -5744,7 +5891,7 @@ function sendTemplateEmail(type,deptCode,rows,extra){
 }
 function sendUpcomingReminderBatches(items,opts){
   opts=opts||{};
-  const tier={label:'Upcoming Target Closure Reminder',frequencyDays:1};
+  const tier={label:'Upcoming Due Date Reminder',frequencyDays:365};
   const groups={};
   items.forEach(function(f){var code=deptCodeForFinding(f);if(code)(groups[code]=groups[code]||[]).push(f);});
   Object.keys(groups).forEach(function(dept){
@@ -5780,8 +5927,8 @@ function runEmailScheduler(mode,opts){
     if(!opts.silent){renderMdBody();showToast('Guarded '+mode+' run queued '+(result.emailQueued||0)+' eligible NC(s)');}
     return result;
   }
-  const ncSev={critical:1,major:1,minor:1};let items=APP.findings.filter(f=>f.status!=='closed'&&ncSev[String(f.sev||'').toLowerCase()]);
-  if(mode==='upcoming')items=items.filter(f=>{const days=daysUntilDue(f);return days!==null&&days>=0&&days<=5;});
+  const ncSev={critical:1,major:1,minor:1};let items=APP.findings.filter(f=>isFindingEmailActionable(f)&&ncSev[String(f.sev||'').toLowerCase()]);
+  if(mode==='upcoming')items=items.filter(f=>{const days=daysUntilDue(f);return days!==null&&days>=0&&days<=2;});
   if(mode==='delayed'||mode==='escalation')items=items.filter(f=>delayDays(f)>0);
   if(mode==='upcoming'){
     const result=sendUpcomingReminderBatches(items,opts);
@@ -5793,7 +5940,7 @@ function runEmailScheduler(mode,opts){
   const jobs=Object.keys(groups).map(dept=>sendTemplateEmail(type,dept,groups[dept],{escalation_level:mode==='escalation'?'auto':''}));
   Promise.all(jobs).then(()=>{renderMdBody();showToast('Scheduler processed '+jobs.length+' department summary email(s)');});
 }
-function sendTestTemplate(){const to=prompt('Send test email to:');if(!to)return;const t=(APP.emailTemplates||[]).find(x=>x.id===APP.emailTemplateId);if(!t)return;const sampleRows=[{ref:'NC-001',auditRef:'AUD-001',clause:'AS9100D §8.5.2',due:new Date().toISOString().slice(0,10),status:'open',sev:'major'}];const vars={department_name:'Sample Department',spoc_name:'Sample SPOC',audit_name:'Sample Audit',nc_count:2,nc_number:'NC-001',target_date:new Date().toISOString().slice(0,10),delay_days:3,clause_name:'AS9100D §8.5.2',clause_description:clauseDescription('AS9100D §8.5.2'),nc_table:ncTable(sampleRows),window_days:5,escalation_level:'1'};sendLoggedEmail('test',[to],[],replaceTemplate(t.subject,vars),replaceTemplate(t.body,vars).replace(/<[^>]+>/g,' '),replaceTemplate(t.body,vars),'');}
+function sendTestTemplate(){const to=prompt('Send test email to:');if(!to)return;const t=(APP.emailTemplates||[]).find(x=>x.id===APP.emailTemplateId);if(!t)return;const sampleRows=[{ref:'NC-001',auditRef:'AUD-001',clause:'AS9100D §8.5.2',due:new Date().toISOString().slice(0,10),status:'open',sev:'major'}];const vars={department_name:'Sample Department',spoc_name:'Sample SPOC',audit_name:'Sample Audit',nc_count:2,nc_number:'NC-001',target_date:new Date().toISOString().slice(0,10),delay_days:3,clause_name:'AS9100D §8.5.2',clause_description:clauseDescription('AS9100D §8.5.2'),nc_table:ncTable(sampleRows),window_days:2,escalation_level:'1'};sendLoggedEmail('test',[to],[],replaceTemplate(t.subject,vars),replaceTemplate(t.body,vars).replace(/<[^>]+>/g,' '),replaceTemplate(t.body,vars),'');}
 function sendAuditSubmissionEmail(audit,rows){return sendTemplateEmail('audit_submission',audit.dept,rows,{audit_name:audit.ref||audit.name||audit.deptName,attachment:'Audit Report PDF',submitted_at:new Date().toLocaleString()});}
 
 // Dept CRUD
@@ -5846,9 +5993,38 @@ function renderAdmBody(t='users'){
 }
 function resetUserPw(id){
   const u=APP.users.find(x=>x.id===id);if(!u)return;
-  const np=prompt('Enter new password for '+u.name+' (min 6 chars):');
-  if(!np||np.length<6){showToast('⚠ Password must be at least 6 characters');return;}
-  const U=APP.users;const usr=U.find(x=>x.id===id);if(usr){usr.password=np;APP.users=U;showToast('✅ Password reset for '+u.name);}
+  const suggested=generateAdminPassword();
+  const np=prompt('Current password cannot be viewed because it is stored as a secure hash.\n\nEnter new password for '+u.name+' or use the generated one below:',suggested);
+  if(!np||np.length<6){showToast('Password must be at least 6 characters');return;}
+  const U=APP.users;const usr=U.find(x=>x.id===id);
+  if(usr){
+    usr.password=np;
+    APP.users=U;
+    refreshUsersFromServer()
+      .then(function(){
+        renderAdmBody('users');
+        copyText(np);
+        alert('Password reset for '+u.name+'.\n\nNew password: '+np+'\n\nShare it securely. It will not be viewable again after this.');
+        showToast('Password reset and copied');
+      })
+      .catch(function(e){showToast('Password saved, refresh failed: '+e.message);});
+  }
+}
+function generateAdminPassword(){
+  const alphabet='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+  let body='';
+  if(window.crypto&&window.crypto.getRandomValues){
+    const bytes=new Uint8Array(10);window.crypto.getRandomValues(bytes);
+    body=Array.from(bytes).map(function(b){return alphabet[b%alphabet.length];}).join('');
+  }else{
+    for(let i=0;i<10;i++)body+=alphabet[Math.floor(Math.random()*alphabet.length)];
+  }
+  return 'OnePWS@'+body+'!';
+}
+function copyText(text){
+  try{
+    if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(String(text||'')).catch(function(){});
+  }catch(_e){}
 }
 function saveSystemSettings(){
   LS.set('ap_show_creds',false);
@@ -6011,7 +6187,7 @@ function managerSendDeptReminder(code){
   const rec=recipientsForDept(code,type,rows.reduce((m,f)=>Math.max(m,delayDays(f)),0));
   const first=rows&&rows[0]||{};
   const subject='Overdue NCs - '+d.name;
-  const vars={department_name:d.name,spoc_name:rec.spocName,nc_count:rows.length,nc_number:first.ref||'',target_date:first.due||'',delay_days:delayDays(first),clause_name:clauseName(first.clause),clause_description:clauseDescription(first.clause),nc_table:ncTable(rows),window_days:5,escalation_level:'Manager'};
+  const vars={department_name:d.name,spoc_name:rec.spocName,nc_count:rows.length,nc_number:first.ref||'',target_date:first.due||'',delay_days:delayDays(first),clause_name:clauseName(first.clause),clause_description:clauseDescription(first.clause),nc_table:ncTable(rows),window_days:2,escalation_level:'Manager'};
   const html=replaceTemplate(tpl.body,vars);
   const ccMerged=[...new Set(rec.cc.concat(fixedCc))];
   sendLoggedEmail(type,spocTo.length?spocTo:rec.to,ccMerged,subject,html.replace(/<[^>]+>/g,' '),html,'').then(()=>showToast('Department reminder sent/logged'));
@@ -7180,7 +7356,11 @@ function submitAudit(){
   const unanswered=allQ.filter(q=>!AS.answers[q.id]).length;
   if(unanswered>0){showToast('⚠ '+unanswered+' unanswered. Mark N/A or answer all before submitting.',4000);return;}
   // Save audit findings to the Findings Register
-  const F=APP.findings;const auditFindings={...AS.findings};
+  const F=APP.findings;const auditFindings={};
+  Object.entries(AS.findings||{}).forEach(function(entry){
+    var qId=entry[0],finding=entry[1];
+    if(AS.answers[qId]==='no'&&isRealAuditFinding(finding))auditFindings[qId]=finding;
+  });
   const submittedAt=new Date().toISOString();
   const auditScoreFrozen=auditScore(Object.values(auditFindings));
   const auditFindingCountsFrozen=auditFindingCounts(Object.values(auditFindings));
@@ -7289,7 +7469,7 @@ function showAuditCompletionReport(audit,sessionData){
   const yes=allQ.filter(q=>session.answers[q.id]==='yes').length;
   const no=allQ.filter(q=>session.answers[q.id]==='no').length;
   const na=allQ.filter(q=>session.answers[q.id]==='na').length;
-  const finds=Object.values(session.findings||{});
+  const finds=sessionAuditFindingRows(session,audit);
   const score=typeof audit.auditScoreFrozen==='number'?audit.auditScoreFrozen:auditScore(finds);
   const sc=auditScoreColor(score);
   mc.innerHTML='<div class="card sg" style="border:2px solid var(--brand);">'+
@@ -7305,7 +7485,7 @@ function showAuditCompletionReport(audit,sessionData){
     '<div style="text-align:center;background:var(--bg3);border-radius:7px;padding:12px;"><div style="font-size:22px;font-weight:900;">'+na+'</div><div class="txx td">N/A</div></div></div>'+
     '<div class="ch"><span class="dot" style="background:var(--green)"></span>Full Checklist Results ('+allQ.length+' questions)</div>'+
     '<div class="tw mb3"><table><thead><tr><th>#</th><th>Clause</th><th>Question</th><th>Result</th><th>Observation</th></tr></thead><tbody>'+
-    allQ.map(function(q,i){var ans=session.answers?session.answers[q.id]:'';var note=session.notes?session.notes[q.id]||'':'';var finding=session.findings?session.findings[q.id]:null;var color=ans==='yes'?'green':ans==='no'?'red':ans==='na'?'text3':'amber';var label=ans==='yes'?'✅ Compliant':ans==='no'?'❌ Non-Compliant':ans==='na'?'N/A':'⏭ Skipped';return '<tr style="background:'+(ans==='no'?'var(--red-bg)':ans==='yes'?'var(--green-bg)':'inherit')+';"><td class="pr">'+(i+1)+'</td><td>'+badge('b-blue',q.clause||'—')+'</td><td style="max-width:300px;">'+q.text+'</td><td><span style="color:var(--'+color+');font-weight:700;">'+label+'</span></td><td style="font-size:11px;">'+((finding?'⚠ '+finding.desc+' ':'')+note)+'</td></tr>';}).join('')+
+    allQ.map(function(q,i){var ans=session.answers?session.answers[q.id]:'';var note=session.notes?session.notes[q.id]||'':'';var finding=session.findings&&ans==='no'&&isRealAuditFinding(session.findings[q.id])?session.findings[q.id]:null;var color=ans==='yes'?'green':ans==='no'?'red':ans==='na'?'text3':'amber';var label=ans==='yes'?'✅ Compliant':ans==='no'?'❌ Non-Compliant':ans==='na'?'N/A':'⏭ Skipped';return '<tr style="background:'+(ans==='no'?'var(--red-bg)':ans==='yes'?'var(--green-bg)':'inherit')+';"><td class="pr">'+(i+1)+'</td><td>'+badge('b-blue',q.clause||'—')+'</td><td style="max-width:300px;">'+q.text+'</td><td><span style="color:var(--'+color+');font-weight:700;">'+label+'</span></td><td style="font-size:11px;">'+((finding?'⚠ '+finding.desc+' ':'')+note)+'</td></tr>';}).join('')+
     '</tbody></table></div>'+
     (finds.length?'<div class="ch"><span class="dot" style="background:var(--red)"></span>Non-Conformances Summary ('+finds.length+')</div>'+
     '<div class="tw mb3"><table><thead><tr><th>#</th><th>Description</th><th>Severity</th><th>Root Cause</th></tr></thead><tbody>'+
@@ -7313,7 +7493,7 @@ function showAuditCompletionReport(audit,sessionData){
     '</tbody></table></div>':'<div class="info-box mb3">No non-conformances — full compliance!</div>')+
     (function(){
       var photos=[];
-      if(session.findings){Object.values(session.findings).forEach(function(f){if(f.files&&f.files.length)photos.push(f);});}
+      sessionAuditFindingRows(session,audit).forEach(function(f){if(f.files&&f.files.length)photos.push(f);});
       if(!photos.length)return '';
       return '<div class="ch"><span class="dot" style="background:var(--teal)"></span>Before vs After Photo Evidence</div>'+
         photos.map(function(f){
@@ -7351,13 +7531,14 @@ function downloadCompletionPDF(){
   const allQ=(audit.sections||[]).flatMap(s=>s._checkpoints||[]);
   const yes=allQ.filter(q=>sess.answers[q.id]==='yes').length;
   const no=allQ.filter(q=>sess.answers[q.id]==='no').length;
-  const score=typeof audit.auditScoreFrozen==='number'?audit.auditScoreFrozen:auditScoreFromSessionFindings(sess);
-  doc.text('Audit Score: '+score+'%  |  Questions: '+allQ.length+'  |  Findings: '+Object.keys(sess.findings||{}).length,14,38);
+  const pdfFinds=sessionAuditFindingRows(sess,audit);
+  const score=typeof audit.auditScoreFrozen==='number'?audit.auditScoreFrozen:auditScore(pdfFinds);
+  doc.text('Audit Score: '+score+'%  |  Questions: '+allQ.length+'  |  Findings: '+pdfFinds.length,14,38);
   // Full checklist results table
-  const chkRows=allQ.map(function(q,i){var ans=sess.answers?sess.answers[q.id]:'';var finding=sess.findings?sess.findings[q.id]:null;var note=sess.notes?sess.notes[q.id]||'':'';return[(i+1),q.clause||'—',q.text,ans==='yes'?'Compliant':ans==='no'?'Non-Compliant':ans==='na'?'N/A':'Skipped',(finding?finding.desc+' ':'')+note];});
+  const chkRows=allQ.map(function(q,i){var ans=sess.answers?sess.answers[q.id]:'';var finding=sess.findings&&ans==='no'&&isRealAuditFinding(sess.findings[q.id])?sess.findings[q.id]:null;var note=sess.notes?sess.notes[q.id]||'':'';return[(i+1),q.clause||'—',q.text,ans==='yes'?'Compliant':ans==='no'?'Non-Compliant':ans==='na'?'N/A':'Skipped',(finding?finding.desc+' ':'')+note];});
   doc.autoTable({startY:44,head:[['#','Clause','Question','Result','Observation']],body:chkRows,styles:{fontSize:7,cellPadding:2,overflow:'linebreak'},headStyles:{fillColor:[37,99,235],textColor:255},margin:{left:14,right:14},columnStyles:{2:{cellWidth:55},4:{cellWidth:40}}});
   // NC summary
-  const finds=Object.values(sess.findings||{});
+  const finds=pdfFinds;
   if(finds.length){
     doc.autoTable({startY:doc.lastAutoTable.finalY+8,head:[['#','Finding','Severity','Root Cause']],body:finds.map(function(f,i){return[(i+1),f.desc||'',SEV_LABEL[f.severity]||f.severity,f.rc||'—'];}),styles:{fontSize:8,overflow:'linebreak'},headStyles:{fillColor:[192,57,43],textColor:255},margin:{left:14,right:14}});
   }
