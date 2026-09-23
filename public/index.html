@@ -4602,21 +4602,43 @@ function reportFindingsForDept(code){
   }
   return rows.map(function(f){var sev=normalizeAuditSeverity(f.sev||f.severity);return Object.assign({},f,{sev:sev,severity:sev});});
 }
+function reportSelectedDeptCodes(){
+  var f=APP.reportDeptFilter;
+  if(Array.isArray(f))return f.filter(Boolean);
+  if(!f||f==='all')return [];
+  return [f];
+}
+function reportDeptIsSelected(code){
+  var selected=reportSelectedDeptCodes();
+  var codeText=String(code||'').toUpperCase();
+  return selected.some(function(sel){return String(sel||'').toUpperCase()===codeText;});
+}
+function reportDeptHasData(d,audits,status){
+  if((status||APP.reportStatusFilter||'completed')==='completed'){
+    return (audits||completedAuditsSorted()).some(function(a){return auditMatchesDeptCode(a,d.code);});
+  }
+  return filteredFindings().some(function(f){return findingMatchesDeptCode(f,d.code);})
+    || completedAuditsSorted().some(function(a){return auditMatchesDeptCode(a,d.code);});
+}
 function reportDeptList(){
-  var depts=APP.currentUser?.role==='spoc'?APP.depts.filter(d=>deptValuesMatch(d.code,APP.currentUser?.dept)||deptValuesMatch(d.name,APP.currentUser?.dept)):(APP.reportDeptFilter&&APP.reportDeptFilter!=='all'?APP.depts.filter(d=>deptValuesMatch(d.code,APP.reportDeptFilter)||deptValuesMatch(d.name,APP.reportDeptFilter)):APP.depts);
+  var selected=reportSelectedDeptCodes();
+  var depts=APP.currentUser?.role==='spoc'
+    ?APP.depts.filter(d=>deptValuesMatch(d.code,APP.currentUser?.dept)||deptValuesMatch(d.name,APP.currentUser?.dept))
+    :(selected.length?APP.depts.filter(d=>selected.some(sel=>deptValuesMatch(d.code,sel)||deptValuesMatch(d.name,sel))):APP.depts);
   var audits=[];
+  var status=APP.reportStatusFilter||'completed';
   if((APP.reportStatusFilter||'completed')==='completed'){
     audits=completedAuditsSorted();
-    depts=depts.filter(d=>audits.some(a=>auditMatchesDeptCode(a,d.code)));
+    depts=depts.filter(d=>reportDeptHasData(d,audits,status));
   }
   var byAlias={};
   depts.forEach(function(d){
     var key=deptToken(d.name)||deptToken(d.code);
     var prev=byAlias[key];
     if(!prev){byAlias[key]=d;return;}
-    var want=String((APP.currentUser&&APP.currentUser.dept)||APP.reportDeptFilter||'').toUpperCase();
-    var dExact=String(d.code||'').toUpperCase()===want;
-    var pExact=String(prev.code||'').toUpperCase()===want;
+    var want=selected.length?selected:[(APP.currentUser&&APP.currentUser.dept)||''];
+    var dExact=want.some(function(code){return deptValuesMatch(d.code,code);});
+    var pExact=want.some(function(code){return deptValuesMatch(prev.code,code);});
     var dAudited=audits.some(a=>String(a.dept||'').toUpperCase()===String(d.code||'').toUpperCase());
     var pAudited=audits.some(a=>String(a.dept||'').toUpperCase()===String(prev.code||'').toUpperCase());
     if((dExact&&!pExact)||(dAudited&&!pAudited))byAlias[key]=d;
@@ -4652,8 +4674,8 @@ function renderReports(){
   </div>
   <div class="ch sg"><span class="dot" style="background:var(--accent)"></span>Department-wise Reports</div>
   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
-    ${APP.currentUser?.role==="spoc"?"":`<div class="badge ${APP.reportDeptFilter==='all'?'b-brand':'b-gray'}" id="rpt-btn-all" style="cursor:pointer;padding:5px 10px;font-size:11px;" onclick="filterReportDept('all')">All Depts</div>`}
-    ${(APP.currentUser?.role==="spoc"?APP.depts.filter(d=>deptValuesMatch(d.code,APP.currentUser?.dept)||deptValuesMatch(d.name,APP.currentUser?.dept)):APP.depts).map(d=>`<div class="badge ${deptValuesMatch(APP.reportDeptFilter,d.code)?'b-brand':'b-gray'} rpt-dept-btn" id="rpt-btn-${d.code}" style="cursor:pointer;padding:5px 10px;font-size:11px;" onclick="filterReportDept('${d.code}')">${d.code}</div>`).join('')}
+    ${APP.currentUser?.role==="spoc"?"":`<div class="badge ${reportSelectedDeptCodes().length?'b-gray':'b-brand'}" id="rpt-btn-all" style="cursor:pointer;padding:5px 10px;font-size:11px;" onclick="filterReportDept('all')">All Depts</div>`}
+    ${(APP.currentUser?.role==="spoc"?APP.depts.filter(d=>deptValuesMatch(d.code,APP.currentUser?.dept)||deptValuesMatch(d.name,APP.currentUser?.dept)):APP.depts).map(d=>{const hasData=reportDeptHasData(d,completedAuditsSorted(),activeStatus);const cls=reportDeptIsSelected(d.code)?'b-brand':(hasData?'b-gray':'b-gray');const op=hasData?'':'opacity:.45;';return`<div class="badge ${cls} rpt-dept-btn" id="rpt-btn-${d.code}" title="${hasData?'':'No report data for current status filter'}" style="cursor:pointer;padding:5px 10px;font-size:11px;${op}" onclick="filterReportDept('${d.code}')">${d.code}</div>`;}).join('')}
   </div>
   <div class="grid g3 sg" id="report-cards">${genReportCards(visibleDepts)}</div>
   <div id="report-preview" class="hidden"></div>`;
@@ -4665,13 +4687,22 @@ function toggleStdReport(id){
   renderPage('reports');
 }
 function filterReportDept(code){
-  APP.reportDeptFilter=code;
+  if(code==='all'){
+    APP.reportDeptFilter='all';
+  }else{
+    var selected=reportSelectedDeptCodes();
+    var exists=selected.some(function(sel){return deptValuesMatch(sel,code);});
+    selected=exists?selected.filter(function(sel){return !deptValuesMatch(sel,code);}):selected.concat([code]);
+    APP.reportDeptFilter=selected.length?selected:'all';
+  }
   const depts=reportDeptList();
   el('report-cards').innerHTML=genReportCards(depts);
-  // Update highlighting
-  document.querySelectorAll('.rpt-dept-btn,#rpt-btn-all').forEach(b=>{b.className='badge b-gray';b.style.cssText='cursor:pointer;padding:5px 10px;font-size:11px;';});
-  const activeBtn=el('rpt-btn-'+code);
-  if(activeBtn){activeBtn.className='badge b-brand';activeBtn.style.cssText='cursor:pointer;padding:5px 10px;font-size:11px;';}
+  document.querySelectorAll('.rpt-dept-btn').forEach(function(b){
+    var code=(b.id||'').replace('rpt-btn-','');
+    b.className='badge '+(reportDeptIsSelected(code)?'b-brand':'b-gray')+' rpt-dept-btn';
+  });
+  var allBtn=el('rpt-btn-all');
+  if(allBtn)allBtn.className='badge '+(reportSelectedDeptCodes().length?'b-gray':'b-brand');
 }
 function searchReports(q){
   q=q.toLowerCase().trim();
