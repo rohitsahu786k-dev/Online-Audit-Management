@@ -157,7 +157,13 @@ async function getCollection() {
 
   if (!mongoConnectPromise) {
     mongoConnectPromise = (async () => {
-      mongoClient = new MongoClient(MONGODB_URI);
+      mongoClient = new MongoClient(MONGODB_URI, {
+        maxPoolSize: 10,
+        minPoolSize: 0,
+        serverSelectionTimeoutMS: 8000,
+        connectTimeoutMS: 8000,
+        socketTimeoutMS: 20000
+      });
       await mongoClient.connect();
       const db = mongoClient.db(MONGODB_DB);
       appData = db.collection('appdata');
